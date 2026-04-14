@@ -1,0 +1,1450 @@
+import { useState, useRef, useEffect, useMemo, Fragment } from "react";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DATA
+// ─────────────────────────────────────────────────────────────────────────────
+
+const EVENTS = [
+  {
+    id:"1", magnitude:42.1, source:"Reuters", time:"32m ago", ageMinutes:32, url:"https://reuters.com",
+    type:"Monetary Policy",
+    headline:"Fed signals higher-for-longer rates amid sticky core PCE",
+    chain:"Fed hawkish → DXY bid → EM FX selloff → Nifty pressure → EM sovereign spreads widen",
+    analysis:"Pushback on rate cut timeline sends front-end yields higher. EM FX and gold face pressure from real yield spike. Capital outflow from Asia equities accelerates as carry unwinds.",
+    thesis:{ dir:"LONG", instruments:["DXY","US 2Y","Short EM FX"], tf:"1–3 days", conviction:8, invalidation:"Core PCE surprise to downside" },
+    flags:[
+      { pos:"EUR/USD",  level:"high",   reason:"Long EUR/USD directly opposed to DXY bid",           action:"TRIM"  },
+      { pos:"Nifty 50", level:"medium", reason:"EM equity outflows accelerate on DXY strength",       action:"HEDGE" },
+      { pos:"Gold",     level:"medium", reason:"Real yield spike historically pressures gold",         action:"HOLD"  },
+    ],
+    scores:     { DXY:4,"EUR/USD":-3,"USD/JPY":3,Gold:-2,BTC:-2,"S&P 500":-2,Nifty:-2,Copper:-2,"US 2Y":4,VIX:2 },
+    hftImpact:  { DXY:5,"EUR/USD":-5,"USD/JPY":4,Gold:-3,BTC:-2,"S&P 500":-2,Nifty:-2,Copper:-1,"US 2Y":5,VIX:3 },
+    swingImpact:{ DXY:4,"EUR/USD":-3,"USD/JPY":3,Gold:-2,BTC:-2,"S&P 500":-2,Nifty:-2,Copper:-2,"US 2Y":4,VIX:2 },
+    macroImpact:{ DXY:3,"EUR/USD":-2,"USD/JPY":2,Gold:-1,BTC:-1,"S&P 500":-1,Nifty:-2,Copper:-1,"US 2Y":3,VIX:1 },
+    decayHours:6,
+  },
+  {
+    id:"2", magnitude:38.4, source:"Bloomberg", time:"1h ago", ageMinutes:60, url:"https://bloomberg.com",
+    type:"Commodity Shock",
+    headline:"OPEC+ agrees surprise 500k bpd production cut effective Q3",
+    chain:"OPEC cut → Crude +4% → inflation impulse → Fed stays hawkish → DXY bid → INR/JPY weaken",
+    analysis:"Supply shock sends crude 3–4% higher. Inflationary impulse complicates Fed path. Energy-importing EMs (India, Japan) face current account pressure and currency weakness.",
+    thesis:{ dir:"LONG", instruments:["WTI Crude","Energy sector","Short INR"], tf:"1–2 weeks", conviction:9, invalidation:"Demand destruction or OPEC compliance miss" },
+    flags:[
+      { pos:"Nifty 50",  level:"high", reason:"India is major oil importer — crude spike hits CAD",    action:"TRIM"     },
+      { pos:"WTI Crude", level:"low",  reason:"Position profits directly on this move",                action:"SCALE UP" },
+    ],
+    scores:     { DXY:2,"EUR/USD":-1,"USD/JPY":2,Gold:2,BTC:1,"S&P 500":-1,Nifty:-2,Copper:1,"US 2Y":1,VIX:2 },
+    hftImpact:  { DXY:1,"EUR/USD":0, "USD/JPY":1,Gold:3,BTC:0,"S&P 500":-2,Nifty:-3,Copper:1,"US 2Y":0,VIX:3 },
+    swingImpact:{ DXY:2,"EUR/USD":-1,"USD/JPY":2,Gold:2,BTC:1,"S&P 500":-1,Nifty:-2,Copper:1,"US 2Y":1,VIX:2 },
+    macroImpact:{ DXY:3,"EUR/USD":-2,"USD/JPY":3,Gold:2,BTC:1,"S&P 500":-1,Nifty:-3,Copper:2,"US 2Y":2,VIX:2 },
+    decayHours:120,
+  },
+  {
+    id:"3", magnitude:36.9, source:"BLS", time:"3h ago", ageMinutes:180, url:"https://bls.gov",
+    type:"Macro Data",
+    headline:"US NFP +303k vs 214k expected — unemployment 3.8%",
+    chain:"Strong NFP → June cut off table → 2Y +15bps → DXY +0.8% → Gold -1.5% → EM FX pressure",
+    analysis:"Blowout jobs print eliminates June cut narrative. DXY surges, front-end rates spike 15bps. Gold and bonds crushed on real yield spike. Equity market reads no-landing.",
+    thesis:{ dir:"LONG", instruments:["DXY","Short Gold","Short EUR/USD"], tf:"Intraday", conviction:9, invalidation:"Wage growth revision downward" },
+    flags:[
+      { pos:"Gold",    level:"high", reason:"Real yields spike on NFP beat — inverse relationship",  action:"TRIM" },
+      { pos:"EUR/USD", level:"high", reason:"DXY surge crushes EUR/USD directly",                   action:"TRIM" },
+    ],
+    scores:     { DXY:4,"EUR/USD":-3,"USD/JPY":3,Gold:-3,BTC:0,"S&P 500":1,Nifty:-1,Copper:0,"US 2Y":4,VIX:1 },
+    hftImpact:  { DXY:5,"EUR/USD":-5,"USD/JPY":4,Gold:-4,BTC:-1,"S&P 500":2,Nifty:-2,Copper:0,"US 2Y":5,VIX:2 },
+    swingImpact:{ DXY:4,"EUR/USD":-3,"USD/JPY":3,Gold:-3,BTC:0,"S&P 500":1,Nifty:-1,Copper:0,"US 2Y":4,VIX:1 },
+    macroImpact:{ DXY:1,"EUR/USD":-1,"USD/JPY":1,Gold:-1,BTC:0,"S&P 500":0,Nifty:0, Copper:0,"US 2Y":1,VIX:0 },
+    decayHours:8,
+  },
+  {
+    id:"4", magnitude:34.2, source:"Reuters", time:"2h ago", ageMinutes:120, url:"https://reuters.com",
+    type:"Macro Data",
+    headline:"China PMI 48.8 — fifth consecutive contractionary print",
+    chain:"China PMI miss → Copper -2% → AUD/USD falls → Global industrials derate → EM index selloff",
+    analysis:"China demand weakness amplifies commodity headwinds. Copper and iron ore lead declines. Third order: global capex cycle slows, industrials derate worldwide.",
+    thesis:{ dir:"SHORT", instruments:["Copper","EM Index","Short AUD/USD"], tf:"1–2 weeks", conviction:8, invalidation:"China stimulus announcement" },
+    flags:[
+      { pos:"Copper",  level:"critical", reason:"China is 55% of copper demand — PMI miss is direct hit",   action:"TRIM" },
+      { pos:"S&P 500", level:"low",      reason:"US decoupled near-term but global slowdown narrative builds", action:"HOLD" },
+    ],
+    scores:     { DXY:1,"EUR/USD":-1,"USD/JPY":0,Gold:0,BTC:-1,"S&P 500":-1,Nifty:-1,Copper:-4,"US 2Y":0,VIX:3 },
+    hftImpact:  { DXY:0,"EUR/USD":0, "USD/JPY":0,Gold:0,BTC:-1,"S&P 500":-1,Nifty:-1,Copper:-5,"US 2Y":0,VIX:3 },
+    swingImpact:{ DXY:1,"EUR/USD":-1,"USD/JPY":0,Gold:0,BTC:-1,"S&P 500":-1,Nifty:-1,Copper:-4,"US 2Y":0,VIX:3 },
+    macroImpact:{ DXY:2,"EUR/USD":-2,"USD/JPY":0,Gold:1,BTC:-1,"S&P 500":-2,Nifty:-2,Copper:-4,"US 2Y":-1,VIX:3 },
+    decayHours:72,
+  },
+  {
+    id:"5", magnitude:27.8, source:"FT", time:"2.5h ago", ageMinutes:150, url:"https://ft.com",
+    type:"Monetary Policy",
+    headline:"ECB Lagarde: No cuts before summer, inflation risks to upside",
+    chain:"ECB hawkish → EUR/USD bid → Bund yields spike → Italian BTP spreads widen → DAX pressure",
+    analysis:"ECB hawkish surprise narrows rate differential with Fed, supporting EUR. European bank stocks rally on NIM expansion. Southern European sovereign spreads widen.",
+    thesis:{ dir:"LONG", instruments:["EUR/USD","European Banks"], tf:"1–3 days", conviction:6, invalidation:"ECB member walks back Lagarde" },
+    flags:[],
+    scores:     { DXY:-1,"EUR/USD":3,"USD/JPY":0,Gold:-1,BTC:0,"S&P 500":0,Nifty:0,Copper:0,"US 2Y":0,VIX:1 },
+    hftImpact:  { DXY:-2,"EUR/USD":4,"USD/JPY":0,Gold:-1,BTC:0,"S&P 500":0,Nifty:0,Copper:0,"US 2Y":0,VIX:1 },
+    swingImpact:{ DXY:-1,"EUR/USD":3,"USD/JPY":0,Gold:-1,BTC:0,"S&P 500":0,Nifty:0,Copper:0,"US 2Y":0,VIX:1 },
+    macroImpact:{ DXY:-1,"EUR/USD":2,"USD/JPY":0,Gold:0, BTC:0,"S&P 500":0,Nifty:0,Copper:0,"US 2Y":0,VIX:0 },
+    decayHours:48,
+  },
+  {
+    id:"6", magnitude:29.7, source:"CoinDesk", time:"1.5h ago", ageMinutes:90, url:"https://coindesk.com",
+    type:"Regulatory",
+    headline:"Bitcoin ETF inflows hit $800M single-day record",
+    chain:"ETF inflows → BTC price discovery → alt-season → risk-on tone → equities bid → EM FX recover",
+    analysis:"Institutional demand validation sends BTC through resistance. ETH follows with alt-season narrative. Risk-on signal broadly supportive of equities and EM.",
+    thesis:{ dir:"LONG", instruments:["BTC/USD","ETH/USD","Nasdaq"], tf:"1–3 days", conviction:7, invalidation:"ETF outflow reversal or regulatory crackdown" },
+    flags:[],
+    scores:     { DXY:-1,"EUR/USD":1,"USD/JPY":-1,Gold:1,BTC:4,"S&P 500":1,Nifty:1,Copper:1,"US 2Y":0,VIX:-2 },
+    hftImpact:  { DXY:-1,"EUR/USD":1,"USD/JPY":-1,Gold:1,BTC:5,"S&P 500":2,Nifty:1,Copper:1,"US 2Y":0,VIX:-3 },
+    swingImpact:{ DXY:-1,"EUR/USD":1,"USD/JPY":-1,Gold:1,BTC:4,"S&P 500":1,Nifty:1,Copper:1,"US 2Y":0,VIX:-2 },
+    macroImpact:{ DXY:0, "EUR/USD":0,"USD/JPY":0, Gold:0,BTC:2,"S&P 500":0,Nifty:0,Copper:0,"US 2Y":0,VIX:-1 },
+    decayHours:24,
+  },
+];
+
+// Structured key levels — each has current price, distance, and position consequence
+const KEY_LEVELS = [
+  { asset:"DXY",      level:106.50, current:104.22, type:"resistance", posAffected:["EUR/USD","Gold","BTC/USD","Nifty 50"], consequence:"Break above: EUR/USD stop triggered; Gold -2%; EM selloff accelerates" },
+  { asset:"Gold",     level:2340,   current:2318,   type:"support",    posAffected:["Gold"],                                consequence:"Break below: macro long thesis invalidated; reassess 14.7% allocation" },
+  { asset:"BTC/USD",  level:65000,  current:63200,  type:"breakout",   posAffected:["BTC/USD","ETH/USD"],                  consequence:"Break above: confirms ETF-driven price discovery; scale long" },
+  { asset:"US 10Y",   level:4.50,   current:4.38,   type:"threshold",  posAffected:["US 10Y Short","Gold","Nifty 50"],     consequence:"Cross above 4.5%: EM broad selloff; gold pressure; shorts profit" },
+  { asset:"Nifty 50", level:22500,  current:22840,  type:"support",    posAffected:["Nifty 50"],                           consequence:"Break below: confirms EM outflow thesis; exit or full hedge" },
+];
+
+// Next Up widget data (first upcoming event + context)
+const NEXT_UP = {
+  date:"Tomorrow 08:30 ET",
+  name:"US CPI (MoM)",
+  type:"Macro Data",
+  importance:"critical",
+  consensus:"0.3%",
+  prior:"0.4%",
+  affectedPositions:["EUR/USD","Gold","US 10Y Short","DXY"],
+  affectedCount:4,
+  bull:"Cool print (<0.2%): dovish pivot reignites. Gold/BTC rally. EUR/USD long safe.",
+  bear:"Hot print (>0.4%): EUR/USD long at major risk. DXY rallies hard. Gold crushed.",
+};
+
+const UPCOMING_EVENTS = [
+  { id:"u1", date:"Tomorrow 08:30 ET", name:"US CPI (MoM)",         type:"Macro Data",     importance:"critical", expected:"0.3%",          prior:"0.4%", affected:["EUR/USD","Gold","US 10Y Short"], conflictsWith:["1","3"], amplifiesWith:[] },
+  { id:"u2", date:"Thu 14:00 ET",      name:"FOMC Minutes",         type:"Monetary Policy", importance:"high",     expected:"Hawkish",        prior:"Neutral", affected:["EUR/USD","DXY","Gold","US 10Y Short"], conflictsWith:[], amplifiesWith:["1","3"] },
+  { id:"u3", date:"Fri 10:30 ET",      name:"EIA Crude Inventories",type:"Commodity Shock", importance:"medium",   expected:"-2.1M draw",    prior:"+1.8M build", affected:["WTI Crude","Nifty 50"], conflictsWith:[], amplifiesWith:["2"] },
+  { id:"u4", date:"Next Mon 09:00 ET", name:"China Trade Balance",  type:"Macro Data",     importance:"medium",   expected:"$72B surplus",   prior:"$65B", affected:["Copper","Nifty 50","S&P 500"], conflictsWith:[], amplifiesWith:["4"] },
+  { id:"u5", date:"Next Wed 20:00 ET", name:"OPEC Monthly Report",  type:"Commodity Shock", importance:"high",     expected:"Demand rev down",prior:"Neutral", affected:["WTI Crude","Gold"], conflictsWith:["2"], amplifiesWith:[] },
+];
+
+// Positions — added pnlToday, pnlWeek, liquidity tier
+const POSITIONS = [
+  { id:"p1",  name:"EUR/USD",      class:"Forex",       dir:"Long",  size:2500000, pnl:17000,  pnlToday:2100,  pnlWeek:8400,  style:"Swing", styleSet:true,  allocation:12.3, stopPct:1.2,  liquidity:"high"   },
+  { id:"p2",  name:"USD/JPY",      class:"Forex",       dir:"Short", size:1800000, pnl:6300,   pnlToday:940,   pnlWeek:3100,  style:"HFT",   styleSet:true,  allocation:8.8,  stopPct:0.5,  liquidity:"high"   },
+  { id:"p3",  name:"Gold",         class:"Commodities", dir:"Long",  size:3000000, pnl:78000,  pnlToday:4200,  pnlWeek:21000, style:"Macro", styleSet:true,  allocation:14.7, stopPct:2.0,  liquidity:"high"   },
+  { id:"p4",  name:"BTC/USD",      class:"Crypto",      dir:"Long",  size:1200000, pnl:74400,  pnlToday:12800, pnlWeek:31200, style:"Swing", styleSet:true,  allocation:5.9,  stopPct:8.0,  liquidity:"medium" },
+  { id:"p5",  name:"WTI Crude",    class:"Commodities", dir:"Long",  size:800000,  pnl:18400,  pnlToday:3100,  pnlWeek:9200,  style:"Swing", styleSet:false, allocation:3.9,  stopPct:3.0,  liquidity:"high"   },
+  { id:"p6",  name:"S&P 500",      class:"Equities",    dir:"Long",  size:4000000, pnl:88000,  pnlToday:6400,  pnlWeek:22000, style:"Macro", styleSet:true,  allocation:19.6, stopPct:3.5,  liquidity:"high"   },
+  { id:"p7",  name:"Nifty 50",     class:"Equities",    dir:"Long",  size:1500000, pnl:52500,  pnlToday:-1800, pnlWeek:8400,  style:"Macro", styleSet:false, allocation:7.4,  stopPct:3.0,  liquidity:"medium" },
+  { id:"p8",  name:"US 10Y Short", class:"Rates",       dir:"Short", size:2000000, pnl:22000,  pnlToday:1400,  pnlWeek:7800,  style:"Macro", styleSet:true,  allocation:9.8,  stopPct:1.5,  liquidity:"high"   },
+  { id:"p9",  name:"Copper",       class:"Commodities", dir:"Long",  size:600000,  pnl:7800,   pnlToday:-2100, pnlWeek:-1400, style:"Swing", styleSet:false, allocation:2.9,  stopPct:4.0,  liquidity:"medium" },
+  { id:"p10", name:"ETH/USD",      class:"Crypto",      dir:"Long",  size:900000,  pnl:37800,  pnlToday:9200,  pnlWeek:18400, style:"HFT",   styleSet:true,  allocation:4.4,  stopPct:10.0, liquidity:"medium" },
+];
+
+const BRIEF_CATALYSTS = [
+  { n:1, h:"Fed higher-for-longer",  impact:"Kills June cut. EUR/USD and Nifty longs under threat.",   action:"Trim EUR/USD 30% · Add short 10Y · Hedge Nifty" },
+  { n:2, h:"OPEC+ 500k cut",         impact:"WTI profits. India CAD pressure threatens Nifty.",         action:"Scale WTI · Trim Nifty exposure" },
+  { n:3, h:"China PMI 48.8",         impact:"Copper long directly threatened. EM broad weakness.",       action:"Reduce Copper 50% · Monitor EM index" },
+];
+
+const BRIEF_NOTE  = "Net risk-on book faces hawkish overlay headwinds. WTI and crypto longs working. Key risk: DXY strength simultaneously pressuring gold and EM.";
+const BRIEF_TAIL  = "Fed surprise + China hard landing + oil spike → ~12% drawdown. Probability 8%.";
+
+const HMAP = [
+  {label:"DXY",cls:"forex"},{label:"EUR/USD",cls:"forex"},{label:"USD/JPY",cls:"forex"},
+  {label:"Gold",cls:"commodities"},{label:"WTI",cls:"commodities"},{label:"Copper",cls:"commodities"},
+  {label:"BTC",cls:"crypto"},{label:"ETH",cls:"crypto"},
+  {label:"S&P 500",cls:"equities"},{label:"Nifty",cls:"equities"},{label:"DAX",cls:"equities"},
+  {label:"US 2Y",cls:"rates"},{label:"US 10Y",cls:"rates"},{label:"VIX",cls:"rates"},
+];
+
+// Expanded correlation matrix — added BTC, Nifty, VIX as drivers
+const CORRELATION_MATRIX = {
+  "WTI Crude": { "INR/USD":-0.72,"USD/JPY":0.61,"EUR/USD":-0.43,"Nifty 50":-0.68,"Gold":0.38,"S&P 500":-0.21,"Copper":0.55,"BTC":-0.12 },
+  "DXY":       { "EUR/USD":-0.97,"Gold":-0.82,"BTC":-0.41,"Nifty 50":-0.63,"USD/JPY":0.55,"Copper":-0.48,"S&P 500":-0.31,"US 2Y":0.72 },
+  "Gold":      { "DXY":-0.82,"US 2Y":-0.74,"BTC":0.43,"S&P 500":-0.18,"EUR/USD":0.61,"Copper":0.39,"VIX":0.52,"Nifty 50":-0.29 },
+  "BTC":       { "ETH":0.91,"S&P 500":0.38,"Gold":0.43,"DXY":-0.41,"Nifty 50":0.29,"EUR/USD":0.22,"VIX":-0.31 },
+  "Nifty 50":  { "DXY":-0.63,"Copper":0.52,"S&P 500":0.68,"WTI Crude":-0.68,"Gold":-0.29,"BTC":0.29,"VIX":-0.51 },
+  "VIX":       { "S&P 500":-0.78,"Gold":0.52,"DXY":0.31,"BTC":-0.31,"Copper":-0.44,"EUR/USD":-0.22,"Nifty 50":-0.51 },
+};
+
+const POS_CORR_KEY = {
+  "EUR/USD":"EUR/USD","USD/JPY":"USD/JPY","Gold":"Gold","BTC/USD":"BTC",
+  "WTI Crude":"WTI Crude","S&P 500":"S&P 500","Nifty 50":"Nifty 50",
+  "US 10Y Short":"US 2Y","Copper":"Copper","ETH/USD":"ETH",
+};
+
+// Factor exposure for book-level correlation decomposition
+const FACTOR_EXPOSURES = {
+  "EUR/USD":      { "DXY":-0.97,"Risk-On":0.30,"Rates":-0.30,"Oil":-0.10 },
+  "USD/JPY":      { "DXY":0.55, "Risk-On":0.20,"Rates":0.40, "Oil":0.15  },
+  "Gold":         { "DXY":-0.82,"Risk-On":-0.20,"Rates":-0.74,"Oil":0.25 },
+  "BTC/USD":      { "DXY":-0.41,"Risk-On":0.60,"Rates":-0.25,"Oil":-0.10 },
+  "WTI Crude":    { "DXY":-0.20,"Risk-On":0.25,"Rates":0.10, "Oil":1.00  },
+  "S&P 500":      { "DXY":-0.31,"Risk-On":0.80,"Rates":-0.40,"Oil":-0.20 },
+  "Nifty 50":     { "DXY":-0.63,"Risk-On":0.70,"Rates":-0.30,"Oil":-0.55 },
+  "US 10Y Short": { "DXY":0.72, "Risk-On":-0.40,"Rates":0.90,"Oil":0.10  },
+  "Copper":       { "DXY":-0.48,"Risk-On":0.55,"Rates":-0.10,"Oil":0.35  },
+  "ETH/USD":      { "DXY":-0.35,"Risk-On":0.70,"Rates":-0.25,"Oil":-0.10 },
+};
+
+const RISK_PARAMS = {
+  dailyVaR:       247000,
+  dailyVaRLimit:  500000,
+  maxDrawdownPct: 0.08,
+  totalCapital:   20400000,
+  riskBudgetUsed: 0.62,
+};
+
+const SCENARIOS = [
+  { label:"Crude to $120",     desc:"Oil supply shock — WTI +26%",    driver:"WTI Crude", baseMove:0.26,  overrides:{ "WTI Crude":0.26,"DXY":0.02 } },
+  { label:"DXY to 112",        desc:"Dollar surge — DXY +5.7%",       driver:"DXY",       baseMove:0.057, overrides:{ "DXY":0.057 } },
+  { label:"Fed Emergency Cut", desc:"Crisis pivot — rates -50bps",     driver:null,        overrides:{ "Gold":0.09,"BTC/USD":0.14,"EUR/USD":0.03,"S&P 500":0.06,"Nifty 50":0.05,"US 10Y Short":-0.06,"DXY":-0.05 } },
+  { label:"China Hard Landing",desc:"GDP -3% shock",                   driver:null,        overrides:{ "Copper":-0.18,"Nifty 50":-0.09,"S&P 500":-0.07,"Gold":0.05,"DXY":0.04,"EUR/USD":-0.02 } },
+  { label:"BTC to $100k",      desc:"Crypto euphoria",                 driver:"BTC",       baseMove:0.58,  overrides:{ "BTC/USD":0.58,"ETH/USD":0.64,"DXY":-0.03 } },
+];
+
+const INITIAL_PNL_LOG = [
+  { event:"Fed hawkish signal",    type:"Monetary Policy", action:"Trimmed EUR/USD 30%",    outcome:"+$8.2K",  asset:"EUR/USD",   worked:true  },
+  { event:"OPEC cut announcement", type:"Commodity Shock", action:"Scaled WTI long",        outcome:"+$18.4K", asset:"WTI Crude", worked:true  },
+  { event:"China PMI miss",        type:"Macro Data",      action:"Held Copper (mistake)",  outcome:"-$4.1K",  asset:"Copper",    worked:false },
+  { event:"NFP beat",              type:"Macro Data",      action:"Added DXY hedge",        outcome:"+$6.7K",  asset:"DXY",       worked:true  },
+  { event:"ECB hawkish surprise",  type:"Monetary Policy", action:"Held EUR/USD long",      outcome:"+$3.1K",  asset:"EUR/USD",   worked:true  },
+  { event:"BTC ETF record inflow", type:"Regulatory",      action:"Scaled ETH long",        outcome:"+$9.2K",  asset:"ETH/USD",   worked:true  },
+  { event:"China stimulus rumor",  type:"Macro Data",      action:"Added Copper on dip",    outcome:"-$2.8K",  asset:"Copper",    worked:false },
+];
+
+const SCORE_LEGEND = [
+  { range:"+4 to +5",label:"Strong Bullish",  color:"#059669",bg:"ecfdf5",border:"6ee7b7" },
+  { range:"+2 to +3",label:"Moderate Bullish",color:"#10b981",bg:"f0fdf4",border:"86efac" },
+  { range:"+1",      label:"Mild Bullish",    color:"#34d399",bg:"f7fef9",border:"bbf7d0" },
+  { range:"0",       label:"Neutral",         color:"#94a3b8",bg:"f8fafc",border:"e2e8f0" },
+  { range:"−1",      label:"Mild Bearish",    color:"#f87171",bg:"fff8f8",border:"fecaca" },
+  { range:"−2 to −3",label:"Moderate Bearish",color:"#ef4444",bg:"fff1f1",border:"fca5a5" },
+  { range:"−4 to −5",label:"Strong Bearish",  color:"#dc2626",bg:"fef2f2",border:"f87171" },
+];
+
+const STYLE_CONTEXT = {
+  HFT:   { label:"HFT",   color:"#7c3aed", bg_l:"#f5f3ff", bg_d:"#2e1065", desc:"Seconds–minutes" },
+  Swing: { label:"Swing", color:"#0369a1", bg_l:"#eff6ff", bg_d:"#0c2b4e", desc:"3–7 days" },
+  Macro: { label:"Macro", color:"#b45309", bg_l:"#fffbeb", bg_d:"#3d1a00", desc:"Weeks–months" },
+};
+
+// Magnitude methodology — shown in tooltip
+const MAG_DEF = "Composite signal strength (0–100). Formula: (event_type_weight × 0.35) + (source_tier × 0.25) + (market_breadth × 0.25) + (recency_factor × 0.15). Decays exponentially over the event's relevance window.";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THEME
+// ─────────────────────────────────────────────────────────────────────────────
+const T = {
+  dark: {
+    bg:"#0a0c0f",surface:"#111418",card:"#161b22",border:"#21262d",
+    text:"#e6edf3",muted:"#7d8590",faint:"#30363d",
+    accent:"#f0b429",accent2:"#38bdf8",green:"#3fb950",red:"#f85149",
+    blue:"#58a6ff",purple:"#a371f7",
+  },
+  light: {
+    bg:"#f7f8fa",surface:"#ffffff",card:"#ffffff",border:"#e8ecf0",
+    text:"#1e293b",muted:"#64748b",faint:"#f1f5f9",
+    accent:"#d97706",accent2:"#2563eb",green:"#059669",red:"#dc2626",
+    blue:"#2563eb",purple:"#7c3aed",
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+const scoreColor  = (s,d) => s>=4?(d?"#3fb950":"#059669"):s>=2?(d?"#56d364":"#10b981"):s>=1?(d?"#7ee787":"#34d399"):s<=-4?(d?"#f85149":"#dc2626"):s<=-2?(d?"#ff7b72":"#ef4444"):s<=-1?(d?"#ffa198":"#f87171"):(d?"#7d8590":"#94a3b8");
+const scoreBg     = (s,d) => s>=4?(d?"#0d2b1a":"#ecfdf5"):s>=2?(d?"#0a2218":"#f0fdf4"):s>=1?(d?"#091c14":"#f7fef9"):s<=-4?(d?"#2d0f0f":"#fef2f2"):s<=-2?(d?"#220d0d":"#fff1f1"):s<=-1?(d?"#1a0a0a":"#fff8f8"):(d?"#1c2128":"#f8fafc");
+const scoreBorder = (s,d) => s>=4?(d?"#2ea043":"#6ee7b7"):s>=2?(d?"#238636":"#86efac"):s>=1?(d?"#1a6338":"#bbf7d0"):s<=-4?(d?"#b91c1c":"#f87171"):s<=-2?(d?"#991b1b":"#fca5a5"):s<=-1?(d?"#7f1d1d":"#fecaca"):(d?"#30363d":"#e2e8f0");
+
+const riskColor   = { critical:"#f85149",high:"#fb923c",medium:"#fbbf24",low:"#7d8590" };
+const riskBgDark  = { critical:"#2d0f0f",high:"#2d1b0f",medium:"#2d220f",low:"#1c2128" };
+const riskBgLight = { critical:"#fef2f2",high:"#fff7ed",medium:"#fffbeb",low:"#f8fafc" };
+const riskBrDark  = { critical:"#7f1d1d",high:"#9a3412",medium:"#92400e",low:"#30363d" };
+const riskBrLight = { critical:"#fca5a5",high:"#fdba74",medium:"#fcd34d",low:"#e2e8f0" };
+
+const toneColor        = { "RISK-ON":"#3fb950","RISK-OFF":"#f85149","MIXED":"#fbbf24","CRISIS":"#f85149","DOLLAR BULL":"#38bdf8","DEFENSIVE":"#a371f7" };
+const assetColorDark   = { Forex:"#58a6ff",Crypto:"#a371f7",Equities:"#3fb950",Commodities:"#fbbf24",Rates:"#ec4899",forex:"#58a6ff",crypto:"#a371f7",equities:"#3fb950",commodities:"#fbbf24",rates:"#ec4899" };
+const assetColorLight  = { Forex:"#2563eb",Crypto:"#7c3aed",Equities:"#059669",Commodities:"#d97706",Rates:"#db2777",forex:"#2563eb",crypto:"#7c3aed",equities:"#059669",commodities:"#d97706",rates:"#db2777" };
+const importanceColor  = { critical:"#f85149",high:"#fb923c",medium:"#fbbf24",low:"#7d8590" };
+
+const fmt  = n => n>=1e6?`$${(n/1e6).toFixed(1)}M`:n>=1e3?`$${(n/1e3).toFixed(0)}K`:`$${n}`;
+const pnlf = n => `${n>=0?"+":""}$${Math.abs(n/1000).toFixed(0)}K`;
+const pct  = n => `${n>=0?"+":""}${n.toFixed(1)}%`;
+
+// Exponential decay — half-life at 30% of the decay window (not linear)
+function decayFactorExp(ageMinutes, decayHours) {
+  const halfLifeMin = decayHours * 0.30 * 60;
+  const λ = Math.log(2) / halfLifeMin;
+  return Math.max(0, Math.exp(-λ * ageMinutes));
+}
+
+// Proper weighted mean: Σ(score×weight) / Σ(weight) — not divided by count
+function getNetScores(mode, timeDecay) {
+  const agg = {};
+  EVENTS.forEach(e => {
+    const key    = mode==="HFT"?"hftImpact":mode==="Swing"?"swingImpact":mode==="Macro"?"macroImpact":"scores";
+    const scores = e[key] || e.scores;
+    const decay  = timeDecay ? decayFactorExp(e.ageMinutes, e.decayHours) : 1;
+    const w      = (e.magnitude / 40) * decay;
+    Object.entries(scores).forEach(([k,v]) => {
+      if (!agg[k]) agg[k] = { wScore:0, wTotal:0 };
+      agg[k].wScore += v * w;
+      agg[k].wTotal += Math.abs(v) > 0 ? w : 0;
+    });
+  });
+  const out = {};
+  Object.entries(agg).forEach(([k,{wScore,wTotal}]) => {
+    out[k] = wTotal > 0 ? Math.max(-5, Math.min(5, +(wScore/wTotal).toFixed(1))) : 0;
+  });
+  return out;
+}
+
+// Detect assets where significant events disagree — regime uncertainty signal
+function getConflictAssets(mode) {
+  const key = mode==="HFT"?"hftImpact":mode==="Macro"?"macroImpact":"swingImpact";
+  const relevant = EVENTS.filter(e => e.magnitude >= 30);
+  const assets = [...new Set(relevant.flatMap(e => Object.keys(e[key]||e.scores)))];
+  const conflicts = {};
+  assets.forEach(asset => {
+    const vals = relevant.map(e=>(e[key]||e.scores)[asset]||0).filter(v=>Math.abs(v)>=2);
+    if (vals.length >= 2 && vals.some(v=>v>0) && vals.some(v=>v<0)) conflicts[asset] = true;
+  });
+  return conflicts;
+}
+
+// Auto-detect regime from aggregated scores
+function detectRegime(ns) {
+  const dxy=ns["DXY"]||0, vix=ns["VIX"]||0, btc=ns["BTC"]||0, sp=ns["S&P 500"]||0;
+  if (vix>=3 && dxy>=2)          return "RISK-OFF";
+  if (vix>=2 && sp<=-1)          return "RISK-OFF";
+  if (dxy>=3)                    return "DOLLAR BULL";
+  if (btc>=3 && sp>=1)           return "RISK-ON";
+  if (vix<=-2 && sp>=2)          return "RISK-ON";
+  if (Math.abs(dxy)<=1 && Math.abs(vix)<=1 && Math.abs(sp)<=1) return "MIXED";
+  if (dxy>=2)                    return "DOLLAR BULL";
+  return "MIXED";
+}
+
+// Priority-based flag map (highest severity wins per position)
+function getFlags() {
+  const PRIORITY = ["critical","high","medium","low"];
+  const map = {};
+  EVENTS.forEach(e => {
+    (e.flags||[]).forEach(f => {
+      const inc = PRIORITY.indexOf(f.level);
+      const ext = map[f.pos] ? PRIORITY.indexOf(map[f.pos].level) : Infinity;
+      if (inc < ext) map[f.pos] = { ...f, mag:e.magnitude };
+    });
+  });
+  return map;
+}
+
+// Book-level factor exposure
+function getFactorExposure(positions) {
+  const factors = { "DXY":0,"Risk-On":0,"Rates":0,"Oil":0 };
+  positions.forEach(p => {
+    const exp = FACTOR_EXPOSURES[p.name]; if (!exp) return;
+    const dir = p.dir==="Long" ? 1 : -1;
+    Object.keys(factors).forEach(f => { factors[f] += p.size * dir * (exp[f]||0); });
+  });
+  return factors;
+}
+
+function styleFlag(flag, style) {
+  if (!style) return flag.reason;
+  if (style==="HFT")   return `HFT: ${flag.reason}. Spike may exceed stop — exit immediately if triggered.`;
+  if (style==="Swing") return `Swing: ${flag.reason}. Narrative shift affects 3–7 day bias.`;
+  return flag.level==="critical"||flag.level==="high"
+    ? `Macro thesis risk: ${flag.reason}. Evaluate if core thesis is broken.`
+    : `Minor noise for macro timeframe. Monitor but no action.`;
+}
+
+// Quantified sizing recommendations — not just action labels
+function getSizingRec(flag, pos) {
+  const trimMap = { critical:50, high:30, medium:15, low:0 };
+  const hedgeMap = { critical:100, high:70, medium:40, low:20 };
+  if (flag.action==="TRIM")     { const p=trimMap[flag.level]; return `Trim ${p}% — reduce ${fmt(pos.size*p/100)}`; }
+  if (flag.action==="HEDGE")    { const p=hedgeMap[flag.level]; return `Hedge ${p}% notional — ${fmt(pos.size*p/100)}`; }
+  if (flag.action==="SCALE UP") return `Add ~25% — ${fmt(pos.size*0.25)} notional`;
+  return flag.action;
+}
+
+function riskPerTrade(size, stopPct) { return size*(stopPct/100); }
+function volAdjustedSize(size, stopPct) {
+  const total = POSITIONS.reduce((s,p)=>s+p.size,0);
+  const pctRisk = riskPerTrade(size,stopPct)/total;
+  if (pctRisk>0.015) return "REDUCE";
+  if (pctRisk<0.005) return "CAN SCALE";
+  return "OPTIMAL";
+}
+
+// Key level proximity: how close (%) to the level, which direction
+function levelProximity(kl) {
+  const dist = Math.abs(kl.level - kl.current);
+  const distPct = (dist / kl.current) * 100;
+  const approaching = kl.type==="breakout"
+    ? kl.current < kl.level   // approach breakout from below
+    : kl.type==="support"
+      ? kl.current > kl.level // approach support from above
+      : kl.current < kl.level; // approach resistance from below
+  return { distPct, approaching };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FLOATING AI RESEARCH PANEL
+// ─────────────────────────────────────────────────────────────────────────────
+function AIPanel({ dark, open, onClose }) {
+  const t = T[dark?"dark":"light"];
+  const [input, setInput]     = useState("");
+  const [messages, setMessages] = useState([
+    { role:"assistant", text:"Ready. Paste a central bank speech, earnings call excerpt, or macro commentary — I'll extract tradeable signals and sentiment scores." },
+  ]);
+  const [loading, setLoading] = useState(false);
+  const scrollRef = useRef();
+
+  useEffect(()=>{ if(scrollRef.current) scrollRef.current.scrollTop=scrollRef.current.scrollHeight; },[messages,loading]);
+
+  const send = async () => {
+    if (!input.trim()||loading) return;
+    const msg = input.trim(); setInput("");
+    setMessages(m=>[...m,{role:"user",text:msg}]);
+    setLoading(true);
+    try {
+      const apiMsgs = [...messages.slice(1).map(m=>({role:m.role,content:m.text})),{role:"user",content:msg}];
+      const res = await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-20250514", max_tokens:1000,
+          system:`You are a senior macro research analyst in a professional trading nerve center. Given text from central bank communications, earnings calls, or market commentary:
+1. Score hawkish/dovish sentiment: -5 (very dovish) to +5 (very hawkish)
+2. Extract 2–3 specific tradeable insights with instrument names
+3. Suggest conviction adjustments for: DXY, Gold, EUR/USD, EM FX, Rates
+4. Flag second-order cross-asset effects
+Format concisely in market language. Lead with: SENTIMENT: X/5`,
+          messages:apiMsgs,
+        }),
+      });
+      const data = await res.json();
+      setMessages(m=>[...m,{role:"assistant",text:data.content?.map(c=>c.text||"").join("\n")||"Analysis unavailable."}]);
+    } catch { setMessages(m=>[...m,{role:"assistant",text:"API error — check connection."}]); }
+    setLoading(false);
+  };
+
+  if (!open) return null;
+  return (
+    <div style={{ position:"fixed",bottom:70,right:24,width:400,zIndex:1000,
+      background:t.card,border:`1px solid ${t.border}`,borderRadius:14,
+      boxShadow:`0 20px 60px rgba(0,0,0,${dark?0.6:0.15})`,
+      display:"flex",flexDirection:"column",overflow:"hidden",
+    }}>
+      <div style={{ padding:"12px 16px",background:dark?"#1c2128":"#f8fafc",borderBottom:`1px solid ${t.border}`,display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+        <div>
+          <div style={{ fontSize:11,fontWeight:600,color:t.text }}>AI Sentiment Analyst</div>
+          <div style={{ fontSize:10,color:t.muted }}>Paste text · get tradeable signals</div>
+        </div>
+        <button onClick={onClose} style={{ background:"none",border:"none",cursor:"pointer",color:t.muted,fontSize:16,lineHeight:1 }}>×</button>
+      </div>
+      <div ref={scrollRef} style={{ overflowY:"auto",display:"flex",flexDirection:"column",gap:8,minHeight:200,maxHeight:340,padding:"12px" }}>
+        {messages.map((m,i)=>(
+          <div key={i} style={{ padding:"9px 11px",borderRadius:7,
+            background:m.role==="user"?(dark?"#1f3a5f":"#eff6ff"):(dark?"#1c2128":"#f8fafc"),
+            border:`1px solid ${m.role==="user"?(dark?"#1e4080":"#bfdbfe"):(dark?"#30363d":"#e8ecf0")}`,
+            fontSize:11,color:t.text,lineHeight:1.7,whiteSpace:"pre-wrap",
+            alignSelf:m.role==="user"?"flex-end":"flex-start",maxWidth:"92%",
+          }}>{m.text}</div>
+        ))}
+        {loading&&<div style={{ fontSize:10,color:t.muted,fontStyle:"italic",padding:"4px 0" }}>Analyzing…</div>}
+      </div>
+      <div style={{ padding:"10px 12px",borderTop:`1px solid ${t.border}`,display:"flex",gap:8 }}>
+        <textarea value={input} onChange={e=>setInput(e.target.value)}
+          onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();} }}
+          placeholder="Paste speech or ask: 'Is this hawkish?'"
+          rows={2} style={{ flex:1,padding:"7px 9px",borderRadius:6,resize:"none",
+            background:dark?"#1c2128":"#f8fafc",border:`1px solid ${t.border}`,
+            color:t.text,fontSize:11,fontFamily:"inherit",outline:"none",
+          }} />
+        <button onClick={send} disabled={loading} style={{ padding:"0 12px",borderRadius:6,border:"none",cursor:"pointer",
+          background:t.accent2,color:"white",fontSize:11,fontWeight:600,opacity:loading?0.6:1,whiteSpace:"nowrap",
+        }}>Analyze</button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// KEY LEVELS CARD (structured with proximity bars)
+// ─────────────────────────────────────────────────────────────────────────────
+function KeyLevelsCard({ dark, positions }) {
+  const t = T[dark?"dark":"light"];
+  const [expanded, setExpanded] = useState(null);
+  const assetColor = dark ? assetColorDark : assetColorLight;
+
+  return (
+    <div style={{ background:t.card,border:`1px solid ${t.border}`,borderRadius:10,padding:"16px 18px" }}>
+      <div style={{ fontSize:10,color:t.muted,letterSpacing:1.5,marginBottom:14 }}>KEY LEVELS TO WATCH</div>
+      <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
+        {KEY_LEVELS.map((kl,i) => {
+          const { distPct, approaching } = levelProximity(kl);
+          const isClose = distPct < 1.0;
+          const isMedium = distPct >= 1.0 && distPct < 2.5;
+          const levelColor = isClose?"#f85149":isMedium?"#fb923c":t.muted;
+          // Bar fill: 100% = at the level, 0% = far away. Max visual distance ~5%
+          const barFill = Math.max(0, Math.min(98, (1 - distPct/5)*100));
+          const isOpen = expanded===i;
+          const affectsMyPos = kl.posAffected.some(pa => positions.find(p=>p.name===pa));
+
+          return (
+            <div key={i} onClick={()=>setExpanded(isOpen?null:i)} style={{ cursor:"pointer" }}>
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5 }}>
+                <div style={{ display:"flex",alignItems:"center",gap:7 }}>
+                  <span style={{ fontSize:12,color:t.text,fontWeight:500 }}>{kl.asset}</span>
+                  <span style={{ fontSize:9,background:dark?"#1c2128":"#f8fafc",color:t.muted,padding:"1px 5px",borderRadius:3,border:`1px solid ${t.border}` }}>{kl.type}</span>
+                  {affectsMyPos && <span style={{ fontSize:8,color:t.accent,letterSpacing:0.5 }}>IN BOOK</span>}
+                </div>
+                <div style={{ display:"flex",alignItems:"center",gap:8 }}>
+                  <span style={{ fontFamily:"monospace",fontSize:11,color:levelColor,fontWeight:600 }}>{distPct.toFixed(2)}% {approaching?"away":isClose?"BREACHED!":""}</span>
+                  <span style={{ fontFamily:"monospace",fontSize:10,color:t.muted }}>{kl.level.toLocaleString()}</span>
+                </div>
+              </div>
+              {/* Proximity bar */}
+              <div style={{ height:3,background:t.faint,borderRadius:2,marginBottom:isOpen?8:0 }}>
+                <div style={{ height:3,borderRadius:2,width:`${barFill}%`,
+                  background:isClose?`linear-gradient(90deg,#f85149,#ff7b72)`:isMedium?`linear-gradient(90deg,#fb923c,#fbbf24)`:t.accent,
+                  transition:"width 0.3s",
+                }} />
+              </div>
+              {/* Expandable consequence */}
+              {isOpen && (
+                <div style={{ background:dark?"#1c2128":"#f8fafc",border:`1px solid ${t.border}`,borderRadius:6,padding:"8px 10px",marginTop:4 }} className="fadein">
+                  <div style={{ fontSize:10,color:t.muted,marginBottom:4 }}>
+                    <span style={{ color:t.text }}>Current: </span>
+                    <span style={{ fontFamily:"monospace",color:t.text }}>{kl.current.toLocaleString()}</span>
+                    <span style={{ margin:"0 6px",color:t.faint }}>|</span>
+                    <span style={{ color:t.text }}>Level: </span>
+                    <span style={{ fontFamily:"monospace",color:levelColor }}>{kl.level.toLocaleString()}</span>
+                  </div>
+                  <div style={{ fontSize:11,color:t.muted,lineHeight:1.6,marginBottom:6 }}>{kl.consequence}</div>
+                  <div style={{ display:"flex",gap:4,flexWrap:"wrap" }}>
+                    {kl.posAffected.map(pa => {
+                      const pos = positions.find(p=>p.name===pa);
+                      return <span key={pa} style={{ fontSize:9,background:pos?(dark?"#2d220f":"#fffbeb"):t.faint,color:pos?t.accent:t.muted,padding:"2px 6px",borderRadius:3,border:`1px solid ${pos?(dark?"#7a4f1a":"#fcd34d"):t.border}` }}>{pa}</span>;
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NEXT UP WIDGET
+// ─────────────────────────────────────────────────────────────────────────────
+function NextUpWidget({ dark, onViewCalendar }) {
+  const t = T[dark?"dark":"light"];
+  return (
+    <div style={{ background:dark?"#1a0808":"#fff5f5",border:`1px solid ${dark?"#5c1a1a":"#fecaca"}`,borderRadius:10,padding:"14px 16px" }}>
+      <div style={{ fontSize:9,color:"#f85149",letterSpacing:1.8,marginBottom:8,fontWeight:600 }}>NEXT UP</div>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8 }}>
+        <div>
+          <div style={{ fontSize:13,color:t.text,fontWeight:600,marginBottom:3 }}>{NEXT_UP.name}</div>
+          <div style={{ fontSize:11,color:t.muted }}>{NEXT_UP.date}</div>
+        </div>
+        <span style={{ fontSize:9,background:"#f8514920",color:"#f85149",padding:"3px 7px",borderRadius:3,fontWeight:600,letterSpacing:0.5,flexShrink:0,marginLeft:8 }}>{NEXT_UP.importance.toUpperCase()}</span>
+      </div>
+      <div style={{ fontSize:11,color:t.muted,marginBottom:10 }}>
+        Consensus: <span style={{ color:t.text,fontWeight:500 }}>{NEXT_UP.consensus}</span> · Prior: {NEXT_UP.prior} · Affects <span style={{ color:dark?"#fb923c":"#ea580c",fontWeight:600 }}>{NEXT_UP.affectedCount} of your positions</span>
+      </div>
+      <div style={{ background:dark?"#1c2128":"#f8fafc",borderRadius:6,padding:"8px 10px",marginBottom:10 }}>
+        <div style={{ fontSize:9,color:t.green,letterSpacing:1,marginBottom:3 }}>IF COOL</div>
+        <div style={{ fontSize:10,color:t.muted,lineHeight:1.6 }}>{NEXT_UP.bull}</div>
+      </div>
+      <div style={{ background:dark?"#1c2128":"#f8fafc",borderRadius:6,padding:"8px 10px",marginBottom:12 }}>
+        <div style={{ fontSize:9,color:t.red,letterSpacing:1,marginBottom:3 }}>IF HOT</div>
+        <div style={{ fontSize:10,color:t.muted,lineHeight:1.6 }}>{NEXT_UP.bear}</div>
+      </div>
+      <button onClick={onViewCalendar} style={{ background:"none",border:`1px solid ${dark?"#5c1a1a":"#fecaca"}`,borderRadius:6,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit",fontSize:11,color:"#f85149",display:"flex",alignItems:"center",gap:4 }}>
+        View calendar →
+      </button>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOK FACTOR RISK CARD
+// ─────────────────────────────────────────────────────────────────────────────
+function BookRiskCard({ dark, positions }) {
+  const t = T[dark?"dark":"light"];
+  const factors = useMemo(()=>getFactorExposure(positions),[positions]);
+  const maxAbs   = Math.max(...Object.values(factors).map(Math.abs), 1);
+  const factorMeta = {
+    "DXY":     { desc:"Dollar sensitivity", icon:"$" },
+    "Risk-On": { desc:"Risk appetite exposure", icon:"▲" },
+    "Rates":   { desc:"Interest rate sensitivity", icon:"%" },
+    "Oil":     { desc:"Energy factor exposure", icon:"⬡" },
+  };
+  return (
+    <div style={{ background:t.card,border:`1px solid ${t.border}`,borderRadius:10,padding:"16px 18px" }}>
+      <div style={{ fontSize:10,color:t.muted,letterSpacing:1.5,marginBottom:4 }}>BOOK FACTOR EXPOSURE</div>
+      <div style={{ fontSize:11,color:t.muted,marginBottom:12 }}>Dollar-weighted sensitivity across your {positions.length} positions</div>
+      <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
+        {Object.entries(factors).map(([factor, exposure]) => {
+          const meta = factorMeta[factor];
+          const pctOfMax = (Math.abs(exposure)/maxAbs)*100;
+          const isLong = exposure > 0;
+          return (
+            <div key={factor}>
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4 }}>
+                <div>
+                  <span style={{ fontSize:11,color:t.text,fontWeight:500 }}>{factor}</span>
+                  <span style={{ fontSize:10,color:t.muted,marginLeft:6 }}>{meta.desc}</span>
+                </div>
+                <div style={{ display:"flex",alignItems:"center",gap:6 }}>
+                  <span style={{ fontSize:9,color:isLong?t.green:t.red,background:isLong?(dark?"#0d2b1a":"#ecfdf5"):(dark?"#2d0f0f":"#fef2f2"),padding:"1px 6px",borderRadius:3 }}>{isLong?"LONG":"SHORT"}</span>
+                  <span style={{ fontFamily:"monospace",fontSize:11,fontWeight:600,color:isLong?t.green:t.red }}>{fmt(Math.abs(exposure))}</span>
+                </div>
+              </div>
+              <div style={{ height:4,background:t.faint,borderRadius:2,overflow:"hidden" }}>
+                <div style={{ height:4,borderRadius:2,width:`${pctOfMax}%`,background:isLong?`linear-gradient(90deg,${t.green}99,${t.green})`:`linear-gradient(90deg,${t.red}99,${t.red})`,transition:"width 0.3s" }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ marginTop:12,paddingTop:12,borderTop:`1px solid ${t.faint}`,fontSize:11,color:dark?"#fb923c":"#ea580c",lineHeight:1.7 }}>
+        ⚠ Book is heavily long Risk-On. All current macro events are risk-off. Effective correlated beta is significantly higher than individual position sizes suggest.
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCORE LEGEND
+// ─────────────────────────────────────────────────────────────────────────────
+function ScoreLegend({ dark }) {
+  const t = T[dark?"dark":"light"];
+  const [open, setOpen] = useState(false);
+  const ref = useRef();
+  useEffect(()=>{ const h=e=>{ if(ref.current&&!ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("mousedown",h); return()=>document.removeEventListener("mousedown",h); },[]);
+  return (
+    <div ref={ref} style={{ position:"relative",zIndex:200 }}>
+      <button onClick={()=>setOpen(o=>!o)} style={{ display:"flex",alignItems:"center",gap:5,padding:"5px 10px",background:open?(dark?"#21262d":"#f1f5f9"):t.card,border:`1px solid ${t.border}`,borderRadius:6,cursor:"pointer",fontFamily:"inherit",fontSize:10,color:t.muted }}>
+        <span style={{ fontFamily:"monospace",fontSize:11,color:t.text }}>±5</span> Score Guide
+        <svg width="9" height="9" viewBox="0 0 10 10" style={{ transform:open?"rotate(180deg)":"none",transition:"0.15s" }}><path d="M2 3.5L5 6.5L8 3.5" fill="none" stroke={t.muted} strokeWidth="1.5" strokeLinecap="round"/></svg>
+      </button>
+      {open && (
+        <div style={{ position:"absolute",right:0,top:"calc(100% + 6px)",background:t.card,border:`1px solid ${t.border}`,borderRadius:10,padding:"6px",width:300,boxShadow:`0 8px 30px rgba(0,0,0,${dark?0.4:0.1})`,zIndex:300 }}>
+          {SCORE_LEGEND.map((s,i)=>(
+            <div key={i} style={{ display:"flex",gap:8,padding:"7px 10px",borderRadius:5,marginBottom:1 }}>
+              <div style={{ background:`#${s.bg}`,border:`1px solid #${s.border}`,borderRadius:4,padding:"2px 7px",minWidth:64,textAlign:"center",flexShrink:0 }}>
+                <div style={{ fontFamily:"monospace",fontSize:10,fontWeight:600,color:s.color }}>{s.range}</div>
+              </div>
+              <div style={{ fontSize:10,color:t.muted }}><span style={{ fontWeight:600,color:s.color }}>{s.label}</span></div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CORRELATION ENGINE
+// ─────────────────────────────────────────────────────────────────────────────
+function CorrelationEngine({ dark }) {
+  const t = T[dark?"dark":"light"];
+  const [driver, setDriver] = useState("WTI Crude");
+  const [movePct, setMovePct] = useState(4);
+  const corrs  = CORRELATION_MATRIX[driver]||{};
+  const sorted = Object.entries(corrs).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1]));
+  const projected = sorted.map(([asset,corr])=>({ asset,corr,projected:+(corr*movePct).toFixed(2),diverging:Math.abs(corr*movePct)>1.5 }));
+  return (
+    <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+      <div style={{ fontSize:10,color:t.muted,letterSpacing:1.5 }}>DYNAMIC CORRELATION ENGINE — 30-DAY ROLLING</div>
+      <div style={{ display:"flex",gap:10,alignItems:"center",flexWrap:"wrap" }}>
+        <div>
+          <div style={{ fontSize:10,color:t.muted,marginBottom:4 }}>DRIVER</div>
+          <select value={driver} onChange={e=>setDriver(e.target.value)} style={{ padding:"6px 10px",borderRadius:6,border:`1px solid ${t.border}`,background:t.card,color:t.text,fontSize:12,fontFamily:"inherit",outline:"none" }}>
+            {Object.keys(CORRELATION_MATRIX).map(k=><option key={k}>{k}</option>)}
+          </select>
+        </div>
+        <div>
+          <div style={{ fontSize:10,color:t.muted,marginBottom:4 }}>MOVE SIZE</div>
+          <div style={{ display:"flex",alignItems:"center",gap:8 }}>
+            <input type="range" min={-10} max={15} value={movePct} onChange={e=>setMovePct(+e.target.value)} style={{ width:110 }} />
+            <span style={{ fontFamily:"monospace",fontSize:13,color:movePct>=0?t.green:t.red,fontWeight:600,minWidth:40 }}>{movePct>0?"+":""}{movePct}%</span>
+          </div>
+        </div>
+        <div style={{ fontSize:11,color:t.muted,marginTop:16 }}>
+          If <span style={{ color:t.accent,fontWeight:600 }}>{driver}</span> moves <span style={{ color:movePct>=0?t.green:t.red,fontWeight:600 }}>{movePct>0?"+":""}{movePct}%</span>:
+        </div>
+      </div>
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:8 }}>
+        {projected.map(({ asset,corr,projected,diverging })=>(
+          <div key={asset} style={{ background:diverging?(dark?"#2d220f":"#fffbeb"):t.card,border:`1px solid ${diverging?t.accent:t.border}`,borderRadius:8,padding:"10px 12px" }}>
+            <div style={{ display:"flex",justifyContent:"space-between",marginBottom:4 }}>
+              <span style={{ fontSize:11,color:t.text,fontWeight:500 }}>{asset}</span>
+              {diverging&&<span style={{ fontSize:8,background:t.accent,color:"white",padding:"1px 5px",borderRadius:3 }}>ALERT</span>}
+            </div>
+            <div style={{ fontSize:9,color:t.muted,marginBottom:4 }}>ρ = {corr.toFixed(2)}</div>
+            <div style={{ fontFamily:"monospace",fontSize:15,fontWeight:700,color:projected>0?t.green:t.red }}>{projected>0?"+":""}{projected}%</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCENARIO SIMULATOR
+// ─────────────────────────────────────────────────────────────────────────────
+function ScenarioSimulator({ positions, dark }) {
+  const t = T[dark?"dark":"light"];
+  const [selected, setSelected] = useState(null);
+  const total = positions.reduce((s,p)=>s+p.size,0);
+
+  const results = useMemo(()=>{
+    if(!selected) return [];
+    return positions.map(p=>{
+      let shock=0, corrDerived=false;
+      const ck = POS_CORR_KEY[p.name];
+      if (selected.driver && ck && CORRELATION_MATRIX[selected.driver]?.[ck]!==undefined && !selected.overrides?.[p.name]) {
+        shock = +(CORRELATION_MATRIX[selected.driver][ck]*selected.baseMove).toFixed(3);
+        corrDerived = true;
+      } else if (selected.overrides?.[p.name]!==undefined) {
+        shock = selected.overrides[p.name];
+      }
+      return { ...p, shock, pnlImpact:p.size*shock*(p.dir==="Long"?1:-1), corrDerived };
+    }).filter(p=>Math.abs(p.shock)>0.001).sort((a,b)=>Math.abs(b.pnlImpact)-Math.abs(a.pnlImpact));
+  },[selected,positions]);
+
+  const totalImpact = results.reduce((s,r)=>s+r.pnlImpact,0);
+
+  return (
+    <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+      <div style={{ fontSize:10,color:t.muted,letterSpacing:1.5 }}>SCENARIO STRESS TEST — PORTFOLIO IMPACT</div>
+      {/* Stress correlation warning */}
+      <div style={{ background:dark?"#2d1b0f":"#fff7ed",border:`1px solid ${dark?"#9a3412":"#fdba74"}`,borderRadius:8,padding:"9px 13px",fontSize:11,color:dark?"#fb923c":"#ea580c",lineHeight:1.7 }}>
+        ⚠ <strong>Correlation warning:</strong> During tail events, cross-asset correlations converge toward 1.0. Correlated long positions move together adversely. Actual stress losses are typically <strong>1.5–2.5× these estimates</strong>. Liquidity haircuts not modeled.
+      </div>
+      <div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>
+        {SCENARIOS.map(s=>(
+          <button key={s.label} onClick={()=>setSelected(selected?.label===s.label?null:s)} style={{ padding:"6px 12px",borderRadius:6,border:`1px solid ${selected?.label===s.label?t.accent:t.border}`,background:selected?.label===s.label?(dark?"#2d220f":"#fffbeb"):t.card,color:selected?.label===s.label?t.accent:t.muted,fontSize:11,fontWeight:500,cursor:"pointer",fontFamily:"inherit" }}>
+            {s.label}
+          </button>
+        ))}
+      </div>
+      {selected&&(
+        <div style={{ display:"flex",flexDirection:"column",gap:8 }} className="fadein">
+          <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+            <div style={{ fontSize:11,color:t.muted }}>{selected.desc} — on ${(total/1e6).toFixed(1)}M book</div>
+            {selected.driver&&<div style={{ fontSize:10,color:t.accent,background:dark?"#1c2128":"#f8fafc",border:`1px solid ${t.border}`,padding:"2px 8px",borderRadius:4 }}>ρ-derived where available</div>}
+          </div>
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 70px 90px 100px 20px",gap:1,background:t.border,borderRadius:8,overflow:"hidden" }}>
+            {["Position","Dir","Shock","Est. P&L",""].map(h=>(
+              <div key={h} style={{ padding:"7px 12px",background:dark?"#1c2128":"#f8fafc",fontSize:9,color:t.muted,letterSpacing:1 }}>{h}</div>
+            ))}
+            {results.map(r=>(
+              <Fragment key={r.id}>
+                <div style={{ padding:"9px 12px",background:t.card,fontSize:12,color:t.text }}>{r.name}</div>
+                <div style={{ padding:"9px 12px",background:t.card,fontSize:11,fontWeight:600,color:r.dir==="Long"?t.green:t.red }}>{r.dir.toUpperCase()}</div>
+                <div style={{ padding:"9px 12px",background:t.card,fontSize:11,fontFamily:"monospace",color:r.shock>0?t.green:t.red }}>{r.shock>0?"+":""}{(r.shock*100).toFixed(1)}%</div>
+                <div style={{ padding:"9px 12px",background:t.card,fontSize:11,fontFamily:"monospace",fontWeight:600,color:r.pnlImpact>0?t.green:t.red }}>{r.pnlImpact>0?"+":""}{pnlf(r.pnlImpact)}</div>
+                <div style={{ padding:"9px 6px",background:t.card,display:"flex",alignItems:"center",justifyContent:"center" }}>
+                  {r.corrDerived&&<span title="ρ-derived" style={{ fontSize:9,color:t.accent,fontFamily:"monospace" }}>ρ</span>}
+                </div>
+              </Fragment>
+            ))}
+          </div>
+          <div style={{ background:totalImpact>=0?(dark?"#0d2b1a":"#ecfdf5"):(dark?"#2d0f0f":"#fef2f2"),border:`1px solid ${totalImpact>=0?(dark?"#2ea043":"#6ee7b7"):(dark?"#b91c1c":"#fca5a5")}`,borderRadius:8,padding:"11px 16px",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+            <div>
+              <div style={{ fontSize:10,color:t.muted,letterSpacing:1,marginBottom:2 }}>MODELED IMPACT — {selected.label.toUpperCase()}</div>
+              <div style={{ fontSize:10,color:dark?"#fb923c":"#ea580c" }}>Apply 1.5–2.5× multiplier for realistic stress scenario</div>
+            </div>
+            <div style={{ fontFamily:"monospace",fontSize:20,fontWeight:700,color:totalImpact>=0?t.green:t.red }}>{totalImpact>=0?"+":""}{pnlf(totalImpact)}</div>
+          </div>
+        </div>
+      )}
+      {!selected&&<div style={{ fontSize:12,color:t.muted,padding:"16px 0",textAlign:"center" }}>Select a scenario to stress-test the book</div>}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN APP
+// ─────────────────────────────────────────────────────────────────────────────
+export default function NerveCenter() {
+  const [dark, setDark]           = useState(true);
+  const [tab, setTab]             = useState("brief");
+  const [sel, setSel]             = useState(EVENTS[0]);
+  const [positions, setPositions] = useState(POSITIONS);
+  const [impactMode, setImpactMode] = useState("Swing");
+  const [feedView, setFeedView]   = useState("list");    // "list" | "heatmap"
+  const [timeDecay, setTimeDecay] = useState(true);
+  const [pnlLog]                  = useState(INITIAL_PNL_LOG);
+  const [aiOpen, setAiOpen]       = useState(false);
+  const [pnlPeriod, setPnlPeriod] = useState("pnl");     // "pnlToday" | "pnlWeek" | "pnl"
+  const [styleFilter, setStyleFilter] = useState("All");
+  const [portSort, setPortSort]   = useState("default");  // "default"|"pnl"|"size"|"risk"
+
+  const t          = T[dark?"dark":"light"];
+  const assetColor = dark ? assetColorDark : assetColorLight;
+  const riskBg     = dark ? riskBgDark : riskBgLight;
+  const riskBr     = dark ? riskBrDark : riskBrLight;
+
+  const netScores   = useMemo(()=>getNetScores(impactMode,timeDecay),[impactMode,timeDecay]);
+  const flagMap     = useMemo(()=>getFlags(),[]);
+  const conflicts   = useMemo(()=>getConflictAssets(impactMode),[impactMode]);
+  const autoRegime  = useMemo(()=>detectRegime(netScores),[netScores]);
+  const factorExp   = useMemo(()=>getFactorExposure(positions),[positions]);
+
+  const totalPnl   = positions.reduce((s,p)=>s+(p[pnlPeriod]||0),0);
+  const totalSize  = positions.reduce((s,p)=>s+p.size,0);
+  const critFlags  = Object.values(flagMap).filter(f=>f.level==="critical"||f.level==="high").length;
+  const flaggedCount = Object.keys(flagMap).length;
+
+  const setStyle = (id,style) => setPositions(ps=>ps.map(p=>p.id===id?{...p,style,styleSet:true}:p));
+
+  const winRate = pnlLog.filter(p=>p.worked).length/pnlLog.length;
+
+  // Computed edge summary from actual log data
+  const edgeSummary = useMemo(()=>{
+    const typeStats={};
+    pnlLog.forEach(l=>{ if(!typeStats[l.type]) typeStats[l.type]={wins:0,total:0}; typeStats[l.type].total++; if(l.worked) typeStats[l.type].wins++; });
+    const bestType = Object.entries(typeStats).sort((a,b)=>(b[1].wins/b[1].total)-(a[1].wins/a[1].total))[0];
+    const assetWins={};
+    pnlLog.filter(l=>l.worked).forEach(l=>{assetWins[l.asset]=(assetWins[l.asset]||0)+1;});
+    const bestAsset = Object.entries(assetWins).sort((a,b)=>b[1]-a[1])[0];
+    const missTypes={};
+    pnlLog.filter(l=>!l.worked).forEach(l=>{missTypes[l.type]=(missTypes[l.type]||0)+1;});
+    const worstType = Object.entries(missTypes).sort((a,b)=>b[1]-a[1])[0];
+    return [
+      { label:"Best Event Type",    value:bestType?.[0]||"N/A",    sub:`${bestType?.[1].wins||0}/${bestType?.[1].total||0} worked` },
+      { label:"Best Asset",         value:bestAsset?.[0]||"N/A",   sub:`${bestAsset?.[1]||0} wins recorded` },
+      { label:"Miss Pattern",       value:worstType?.[0]||"None",  sub:`${pnlLog.filter(l=>!l.worked).length}/${pnlLog.length} total missed` },
+    ];
+  },[pnlLog]);
+
+  // Net exposure for heatmap
+  const netExposure = useMemo(()=>{
+    const sorted = Object.entries(netScores).sort((a,b)=>b[1]-a[1]);
+    return { bullish:sorted.filter(([,v])=>v>0).slice(0,3), bearish:sorted.filter(([,v])=>v<0).sort((a,b)=>a[1]-b[1]).slice(0,3) };
+  },[netScores]);
+
+  // Portfolio filtered + sorted
+  const filteredPositions = useMemo(()=>{
+    let ps = styleFilter==="All" ? positions : positions.filter(p=>p.style===styleFilter);
+    if (portSort==="pnl")  ps=[...ps].sort((a,b)=>(b[pnlPeriod]||0)-(a[pnlPeriod]||0));
+    if (portSort==="size") ps=[...ps].sort((a,b)=>b.size-a.size);
+    if (portSort==="risk") ps=[...ps].sort((a,b)=>{ const PRIO=["critical","high","medium","low"]; const fa=flagMap[a.name],fb=flagMap[b.name]; const ia=fa?PRIO.indexOf(fa.level):99,ib=fb?PRIO.indexOf(fb.level):99; return ia-ib; });
+    return ps;
+  },[positions,styleFilter,portSort,pnlPeriod,flagMap]);
+
+  const TABS = [
+    {id:"brief",     l:"Morning Brief"},
+    {id:"feed",      l:"Feed / Impact"},
+    {id:"portfolio", l:"Portfolio"},
+    {id:"analysis",  l:"Analysis"},
+    {id:"journal",   l:"Journal"},
+  ];
+
+  const css = `
+    @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&family=Instrument+Serif:ital@0;1&display=swap');
+    *{box-sizing:border-box;margin:0;padding:0;}
+    ::-webkit-scrollbar{width:4px;} ::-webkit-scrollbar-thumb{background:${t.border};border-radius:4px;}
+    .tab-btn{background:none;border:none;cursor:pointer;font-family:inherit;transition:all 0.15s;}
+    .feed-item{transition:background 0.1s;cursor:pointer;}
+    .pos-row{transition:background 0.1s;}
+    .score-chip{transition:transform 0.1s;} .score-chip:hover{transform:translateY(-1px);}
+    @keyframes fadein{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}
+    .fadein{animation:fadein 0.18s ease forwards;}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.35}}
+    .style-select{border-radius:4px;padding:3px 6px;font-size:10px;font-family:inherit;cursor:pointer;outline:none;}
+    a{color:inherit;text-decoration:none;} a:hover{text-decoration:underline;}
+    input[type=range]{accent-color:${t.accent};}
+    textarea:focus{outline:none;border-color:${t.accent2}!important;}
+    select:focus{outline:none;}
+    .mag-tip{position:relative;cursor:help;} .mag-tip:hover .mag-tip-text{display:block;}
+    .mag-tip-text{display:none;position:absolute;right:0;top:calc(100%+4px);background:${t.card};border:1px solid ${t.border};borderRadius:8px;padding:10px 12px;width:260px;fontSize:11px;color:${t.muted};lineHeight:1.6;zIndex:500;boxShadow:0 8px 24px rgba(0,0,0,0.3);}
+  `;
+
+  return (
+    <div style={{ fontFamily:"'DM Sans',system-ui,sans-serif",background:t.bg,minHeight:"100vh",color:t.text,transition:"background 0.2s" }}>
+      <style>{css}</style>
+
+      {/* ── TOP BAR ── */}
+      <div style={{ background:t.surface,borderBottom:`1px solid ${t.border}`,padding:"0 24px",display:"flex",alignItems:"stretch",justifyContent:"space-between",height:52,boxShadow:`0 1px 4px rgba(0,0,0,${dark?0.3:0.04})` }}>
+        <div style={{ display:"flex",alignItems:"center",gap:16 }}>
+          <div style={{ display:"flex",alignItems:"center",gap:8 }}>
+            <div style={{ width:7,height:7,borderRadius:"50%",background:t.green,animation:"pulse 2s infinite" }} />
+            <span style={{ fontFamily:"'Instrument Serif',serif",fontSize:16,color:t.text,letterSpacing:0.3 }}>Nerve Center</span>
+          </div>
+          <div style={{ width:1,height:20,background:t.border }} />
+          <span style={{ fontSize:10,color:t.muted,letterSpacing:1.2 }}>GLOBAL MACRO INTELLIGENCE</span>
+        </div>
+        <div style={{ display:"flex",alignItems:"center" }}>
+          {[
+            { label:"P&L TODAY",     value:pnlf(positions.reduce((s,p)=>s+p.pnlToday,0)), color:t.green },
+            { label:"POSITIONS AT RISK", value:`${flaggedCount} / ${positions.length}`,   color:flaggedCount>=5?t.red:flaggedCount>=3?dark?"#fb923c":"#ea580c":t.muted },
+            { label:"CRIT FLAGS",    value:critFlags,                                       color:critFlags>0?t.red:t.muted },
+            { label:"REGIME",        value:autoRegime,                                      color:toneColor[autoRegime]||t.muted },
+          ].map((s,i)=>(
+            <div key={i} style={{ padding:"0 16px",borderLeft:`1px solid ${t.border}`,display:"flex",flexDirection:"column",justifyContent:"center",height:"100%" }}>
+              <div style={{ fontSize:9,color:t.muted,letterSpacing:1.2,marginBottom:2 }}>{s.label}</div>
+              <div style={{ fontFamily:"'DM Mono',monospace",fontSize:13,fontWeight:500,color:s.color }}>{s.value}</div>
+            </div>
+          ))}
+          <div style={{ padding:"0 12px",borderLeft:`1px solid ${t.border}`,display:"flex",alignItems:"center",gap:10,height:"100%" }}>
+            {/* Risk budget bar */}
+            <div title={`Risk budget: ${(RISK_PARAMS.riskBudgetUsed*100).toFixed(0)}% used. Daily VaR: $${(RISK_PARAMS.dailyVaR/1000).toFixed(0)}K / $${(RISK_PARAMS.dailyVaRLimit/1000).toFixed(0)}K limit.`} style={{ cursor:"help" }}>
+              <div style={{ fontSize:9,color:t.muted,marginBottom:3,letterSpacing:1 }}>RISK BUDGET</div>
+              <div style={{ display:"flex",alignItems:"center",gap:5 }}>
+                <div style={{ width:54,height:5,background:t.faint,borderRadius:3,overflow:"hidden" }}>
+                  <div style={{ height:5,width:`${RISK_PARAMS.riskBudgetUsed*100}%`,background:RISK_PARAMS.riskBudgetUsed>0.8?t.red:RISK_PARAMS.riskBudgetUsed>0.6?dark?"#fb923c":"#ea580c":t.green,borderRadius:3,transition:"width 0.3s" }} />
+                </div>
+                <span style={{ fontFamily:"monospace",fontSize:10,color:RISK_PARAMS.riskBudgetUsed>0.8?t.red:t.muted }}>{(RISK_PARAMS.riskBudgetUsed*100).toFixed(0)}%</span>
+              </div>
+            </div>
+            <button onClick={()=>setDark(d=>!d)} style={{ width:34,height:18,borderRadius:9,border:`1px solid ${t.border}`,background:dark?"#30363d":"#e2e8f0",cursor:"pointer",position:"relative",transition:"background 0.2s",flexShrink:0 }}>
+              <div style={{ width:12,height:12,borderRadius:"50%",background:dark?"#f0b429":"#fbbf24",position:"absolute",top:2,left:dark?16:2,transition:"left 0.2s",display:"flex",alignItems:"center",justifyContent:"center",fontSize:7 }}>{dark?"🌙":"☀"}</div>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* ── NAV ── */}
+      <div style={{ background:t.surface,borderBottom:`1px solid ${t.border}`,padding:"0 24px",display:"flex",gap:0,overflowX:"auto" }}>
+        {TABS.map(tb=>(
+          <button key={tb.id} className="tab-btn" onClick={()=>setTab(tb.id)} style={{ padding:"13px 16px",fontSize:12,fontWeight:500,color:tab===tb.id?t.text:t.muted,borderBottom:`2px solid ${tab===tb.id?t.accent:"transparent"}`,letterSpacing:0.2,whiteSpace:"nowrap" }}>{tb.l}</button>
+        ))}
+      </div>
+
+      {/* ── CONTENT ── */}
+      <div style={{ padding:"22px 24px" }} className="fadein">
+
+        {/* ── MORNING BRIEF ── */}
+        {tab==="brief" && (
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 290px",gap:14,maxWidth:1080 }}>
+            <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
+              {/* Header */}
+              <div style={{ background:t.card,border:`1px solid ${t.border}`,borderRadius:10,padding:"20px 22px" }}>
+                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start" }}>
+                  <div>
+                    <div style={{ fontSize:10,color:t.muted,letterSpacing:1.5,marginBottom:7 }}>{new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"}).toUpperCase()}</div>
+                    <div style={{ fontSize:14,color:t.text,lineHeight:1.7,maxWidth:500 }}>Fed higher-for-longer dominates overnight. DXY bid, EM under pressure. Crypto diverges positively on record ETF inflows.</div>
+                  </div>
+                  <div style={{ background:dark?"#1c200a":"#f0fdf4",border:`1px solid ${toneColor[autoRegime]}40`,borderRadius:7,padding:"8px 14px",flexShrink:0,marginLeft:14,textAlign:"center" }}>
+                    <div style={{ fontSize:9,color:toneColor[autoRegime],letterSpacing:1.5,marginBottom:3 }}>AUTO-REGIME</div>
+                    <div style={{ fontFamily:"'DM Mono',monospace",fontSize:13,fontWeight:600,color:toneColor[autoRegime] }}>{autoRegime}</div>
+                  </div>
+                </div>
+                <div style={{ marginTop:12,paddingTop:12,borderTop:`1px solid ${t.faint}`,display:"flex",gap:8,alignItems:"center" }}>
+                  <span style={{ fontSize:11,color:t.muted }}>Risk-on book facing hawkish macro headwinds.</span>
+                  <button onClick={()=>setTab("feed")} style={{ fontSize:10,color:t.accent2,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",textDecoration:"underline",padding:0 }}>View full event feed →</button>
+                </div>
+              </div>
+              {/* 3 Things */}
+              <div style={{ fontSize:10,color:t.muted,letterSpacing:1.5,padding:"2px 0" }}>3 THINGS BEFORE MARKET OPEN</div>
+              {BRIEF_CATALYSTS.map(c=>(
+                <div key={c.n} style={{ background:t.card,border:`1px solid ${t.border}`,borderRadius:10,padding:"16px 18px",display:"flex",gap:14 }}>
+                  <div style={{ fontFamily:"'Instrument Serif',serif",fontSize:30,color:t.faint,fontWeight:400,lineHeight:1,flexShrink:0,paddingTop:2 }}>0{c.n}</div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:13,color:t.text,fontWeight:500,marginBottom:4 }}>{c.h}</div>
+                    <div style={{ fontSize:12,color:t.muted,marginBottom:9,lineHeight:1.6 }}>{c.impact}</div>
+                    <div style={{ background:dark?"#0d2b1a":"#f0fdf4",border:`1px solid ${dark?"#2ea043":"#bbf7d0"}`,borderRadius:5,padding:"5px 10px",fontSize:11,color:t.green,fontWeight:500 }}>{c.action}</div>
+                  </div>
+                </div>
+              ))}
+              <div style={{ background:dark?"#0c1f3a":"#eff6ff",border:`1px solid ${dark?"#1e4080":"#bfdbfe"}`,borderRadius:10,padding:"14px 18px" }}>
+                <div style={{ fontSize:10,color:t.accent2,letterSpacing:1.5,marginBottom:6 }}>BOOK ASSESSMENT</div>
+                <div style={{ fontSize:12,color:t.muted,lineHeight:1.7 }}>{BRIEF_NOTE}</div>
+              </div>
+              <div style={{ background:dark?"#2d0f0f":"#fef2f2",border:`1px solid ${dark?"#7f1d1d":"#fecaca"}`,borderRadius:10,padding:"14px 18px" }}>
+                <div style={{ fontSize:10,color:t.red,letterSpacing:1.5,marginBottom:6 }}>TAIL RISK</div>
+                <div style={{ fontSize:12,color:dark?"#fca5a5":"#991b1b",lineHeight:1.7 }}>{BRIEF_TAIL}</div>
+              </div>
+            </div>
+
+            {/* Right sidebar */}
+            <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
+              <NextUpWidget dark={dark} onViewCalendar={()=>setTab("feed")} />
+              <KeyLevelsCard dark={dark} positions={positions} />
+              {/* Upcoming compact cards */}
+              <div style={{ background:t.card,border:`1px solid ${t.border}`,borderRadius:10,padding:"14px 16px" }}>
+                <div style={{ fontSize:10,color:t.muted,letterSpacing:1.5,marginBottom:10 }}>UPCOMING CATALYSTS</div>
+                {UPCOMING_EVENTS.slice(1,4).map(ev=>{
+                  const hasConflict = ev.conflictsWith.length>0;
+                  const hasAmplify  = ev.amplifiesWith.length>0;
+                  return (
+                    <div key={ev.id} style={{ paddingBottom:10,marginBottom:10,borderBottom:`1px solid ${t.faint}` }}>
+                      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:3 }}>
+                        <span style={{ fontSize:12,color:t.text,fontWeight:500 }}>{ev.name}</span>
+                        <span style={{ fontSize:9,color:importanceColor[ev.importance],background:`${importanceColor[ev.importance]}20`,padding:"1px 5px",borderRadius:3,flexShrink:0,marginLeft:6 }}>{ev.importance.toUpperCase()}</span>
+                      </div>
+                      <div style={{ fontSize:10,color:t.muted,marginBottom:5 }}>{ev.date} · Exp: {ev.expected}</div>
+                      <div style={{ display:"flex",gap:4 }}>
+                        {hasConflict&&<span style={{ fontSize:9,background:dark?"#2d1b0f":"#fff7ed",color:dark?"#fb923c":"#ea580c",padding:"1px 6px",borderRadius:3,border:`1px solid ${dark?"#9a3412":"#fdba74"}` }}>⚠ CONFLICTS</span>}
+                        {hasAmplify&&<span style={{ fontSize:9,background:dark?"#0d2b1a":"#f0fdf4",color:t.green,padding:"1px 6px",borderRadius:3,border:`1px solid ${dark?"#2ea043":"#bbf7d0"}` }}>✓ AMPLIFIES</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── FEED / IMPACT ── */}
+        {tab==="feed" && (
+          <div style={{ maxWidth:1200 }}>
+            {/* View toggle + controls */}
+            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10 }}>
+              <div style={{ display:"flex",background:t.surface,border:`1px solid ${t.border}`,borderRadius:7,overflow:"hidden" }}>
+                {[{id:"list",l:"Shock Feed"},{id:"heatmap",l:"Impact Map"}].map(v=>(
+                  <button key={v.id} onClick={()=>setFeedView(v.id)} style={{ padding:"7px 16px",border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:11,fontWeight:500,background:feedView===v.id?t.accent:(dark?"#1c2128":"#f8fafc"),color:feedView===v.id?(dark?"#0a0c0f":"white"):t.muted,transition:"0.15s" }}>{v.l}</button>
+                ))}
+              </div>
+              <div style={{ display:"flex",gap:8,alignItems:"center" }}>
+                <div style={{ display:"flex",background:t.surface,border:`1px solid ${t.border}`,borderRadius:7,overflow:"hidden" }}>
+                  {["HFT","Swing","Macro"].map(m=>(
+                    <button key={m} onClick={()=>setImpactMode(m)} style={{ padding:"5px 12px",border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:10,fontWeight:500,background:impactMode===m?t.accent2:(dark?"#1c2128":"#f8fafc"),color:impactMode===m?(dark?"#0a0c0f":"white"):t.muted,transition:"0.15s" }}>{m}</button>
+                  ))}
+                </div>
+                <button onClick={()=>setTimeDecay(d=>!d)} style={{ padding:"5px 10px",borderRadius:7,border:`1px solid ${timeDecay?t.accent:t.border}`,background:timeDecay?(dark?"#2d220f":"#fffbeb"):t.card,color:timeDecay?t.accent:t.muted,fontSize:10,fontWeight:500,cursor:"pointer",fontFamily:"inherit" }}>⏱ {timeDecay?"Decay ON":"No Decay"}</button>
+                <ScoreLegend dark={dark} />
+              </div>
+            </div>
+
+            {/* SHOCK FEED VIEW */}
+            {feedView==="list" && (
+              <div style={{ display:"grid",gridTemplateColumns:"340px 1fr",gap:14 }}>
+                <div>
+                  <div style={{ fontSize:10,color:t.muted,letterSpacing:1.5,marginBottom:10 }}>{EVENTS.length} EVENTS — BY MAGNITUDE</div>
+                  {[...EVENTS].sort((a,b)=>b.magnitude-a.magnitude).map(e=>{
+                    const topFlag=e.flags?.[0];
+                    const decay=decayFactorExp(e.ageMinutes,e.decayHours);
+                    const isStale=decay<0.15;
+                    return (
+                      <div key={e.id} className="feed-item" onClick={()=>setSel(e)} style={{ background:sel?.id===e.id?(dark?"#1c2128":"#f8fafc"):t.card,border:`1px solid ${sel?.id===e.id?t.muted:t.border}`,borderLeft:`3px solid ${topFlag?riskColor[topFlag.level]:sel?.id===e.id?t.text:t.border}`,borderRadius:8,padding:"11px 13px",marginBottom:6,opacity:isStale?0.65:1 }}>
+                        <div style={{ display:"flex",justifyContent:"space-between",gap:8,marginBottom:5 }}>
+                          <div style={{ fontSize:12,color:t.text,lineHeight:1.5,flex:1 }}>{e.headline}</div>
+                          <div style={{ flexShrink:0,textAlign:"right" }}>
+                            {/* Magnitude with tooltip */}
+                            <div className="mag-tip">
+                              <div style={{ fontFamily:"'DM Mono',monospace",fontSize:13,fontWeight:500,color:t.accent,borderBottom:`1px dashed ${t.muted}` }}>{e.magnitude.toFixed(1)}</div>
+                              <div className="mag-tip-text">{MAG_DEF}</div>
+                            </div>
+                            <div style={{ fontSize:9,color:t.muted,marginTop:1 }}>{e.time}</div>
+                          </div>
+                        </div>
+                        <div style={{ display:"flex",gap:4,flexWrap:"wrap",alignItems:"center" }}>
+                          <a href={e.url} target="_blank" rel="noopener noreferrer" onClick={ev=>ev.stopPropagation()} style={{ fontSize:9,background:dark?"#1c2128":"#f8fafc",color:t.blue,padding:"2px 6px",borderRadius:3,border:`1px solid ${t.border}` }}>{e.source} ↗</a>
+                          <span style={{ fontSize:9,background:dark?"#0c1f3a":"#eff6ff",color:t.blue,padding:"2px 6px",borderRadius:3 }}>{e.type}</span>
+                          {topFlag&&<span style={{ fontSize:9,background:riskBg[topFlag.level],color:riskColor[topFlag.level],padding:"2px 6px",borderRadius:3,border:`1px solid ${riskBr[topFlag.level]}` }}>{topFlag.level.toUpperCase()} RISK</span>}
+                          {isStale?<span style={{ fontSize:8,color:t.muted,background:t.faint,padding:"2px 5px",borderRadius:3,letterSpacing:0.5 }}>⏳ STALE</span>:timeDecay&&decay<0.5?<span style={{ fontSize:8,color:t.muted,background:t.faint,padding:"2px 5px",borderRadius:3 }}>⏱ {(decay*100).toFixed(0)}%</span>:null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Detail pane */}
+                <div style={{ background:t.card,border:`1px solid ${t.border}`,borderRadius:10,padding:"20px 22px",maxHeight:"calc(100vh - 155px)",overflowY:"auto" }}>
+                  {sel ? (
+                    <>
+                      <div style={{ display:"flex",gap:6,flexWrap:"wrap",marginBottom:9,alignItems:"center" }}>
+                        <a href={sel.url} target="_blank" rel="noopener noreferrer" style={{ fontSize:10,background:dark?"#1c2128":"#f8fafc",color:t.blue,padding:"3px 8px",borderRadius:3,border:`1px solid ${t.border}`,fontWeight:500 }}>{sel.source} ↗</a>
+                        <span style={{ fontSize:10,background:dark?"#0c1f3a":"#eff6ff",color:t.blue,padding:"3px 8px",borderRadius:3 }}>{sel.type}</span>
+                        <span style={{ fontFamily:"'DM Mono',monospace",fontSize:10,color:t.accent,marginLeft:"auto" }}>MAG {sel.magnitude.toFixed(1)} · {sel.time}</span>
+                      </div>
+                      <div style={{ fontSize:15,color:t.text,lineHeight:1.7,marginBottom:14 }}>{sel.headline}</div>
+                      <div style={{ height:1,background:t.faint,marginBottom:14 }} />
+                      <div style={{ marginBottom:14 }}>
+                        <div style={{ fontSize:10,color:t.muted,letterSpacing:1.5,marginBottom:7 }}>ANALYSIS</div>
+                        <div style={{ fontSize:12,color:t.muted,lineHeight:1.8 }}>{sel.analysis}</div>
+                      </div>
+                      <div style={{ background:dark?"#0c1f3a":"#eff6ff",border:`1px solid ${dark?"#1e4080":"#bfdbfe"}`,borderRadius:8,padding:"11px 13px",marginBottom:14 }}>
+                        <div style={{ fontSize:10,color:t.blue,letterSpacing:1.5,marginBottom:6 }}>2ND / 3RD ORDER CHAIN</div>
+                        <div style={{ fontSize:11,fontFamily:"'DM Mono',monospace",color:dark?"#93c5fd":"#1d4ed8",lineHeight:1.9 }}>{sel.chain}</div>
+                      </div>
+                      {sel.thesis&&(
+                        <div style={{ background:dark?"#0d2b1a":"#f0fdf4",border:`1px solid ${dark?"#2ea043":"#bbf7d0"}`,borderRadius:8,padding:"12px 14px",marginBottom:14 }}>
+                          <div style={{ fontSize:10,color:t.green,letterSpacing:1.5,marginBottom:9 }}>TRADE THESIS</div>
+                          <div style={{ display:"flex",gap:7,flexWrap:"wrap",marginBottom:9 }}>
+                            <span style={{ fontSize:11,background:dark?"#0d2b1a":"#dcfce7",color:t.green,padding:"4px 10px",borderRadius:4,fontWeight:600,border:`1px solid ${dark?"#2ea043":"#86efac"}` }}>{sel.thesis.dir}</span>
+                            <span style={{ fontSize:11,background:t.faint,color:t.muted,padding:"4px 10px",borderRadius:4,border:`1px solid ${t.border}` }}>{sel.thesis.tf}</span>
+                            <span style={{ fontSize:11,background:dark?"#2d220f":"#fffbeb",color:t.accent,padding:"4px 10px",borderRadius:4,border:`1px solid ${dark?"#7a4f1a":"#fcd34d"}` }}>CONVICTION {sel.thesis.conviction}/10</span>
+                          </div>
+                          <div style={{ fontSize:12,color:t.muted,marginBottom:4 }}>Instruments: <span style={{ color:t.text,fontWeight:500 }}>{sel.thesis.instruments.join(" · ")}</span></div>
+                          <div style={{ fontSize:12,color:t.muted }}>Invalidated if: {sel.thesis.invalidation}</div>
+                        </div>
+                      )}
+                      {sel.flags.length>0&&(
+                        <div style={{ marginBottom:14 }}>
+                          <div style={{ fontSize:10,color:t.muted,letterSpacing:1.5,marginBottom:7 }}>POSITION FLAGS — WITH SIZING</div>
+                          {sel.flags.map((f,i)=>{
+                            const pos=positions.find(p=>p.name===f.pos);
+                            return (
+                              <div key={i} style={{ background:riskBg[f.level],border:`1px solid ${riskBr[f.level]}`,borderRadius:7,padding:"9px 13px",marginBottom:5 }}>
+                                <div style={{ display:"flex",alignItems:"center",gap:7,marginBottom:3 }}>
+                                  <span style={{ fontSize:12,color:t.text,fontWeight:500 }}>{f.pos}</span>
+                                  <span style={{ fontSize:9,color:riskColor[f.level],background:t.card,padding:"2px 7px",borderRadius:3,border:`1px solid ${riskBr[f.level]}`,fontWeight:500 }}>{f.level.toUpperCase()}</span>
+                                  {pos&&<span style={{ fontSize:9,background:STYLE_CONTEXT[pos.style]?.[dark?"bg_d":"bg_l"]||t.faint,color:STYLE_CONTEXT[pos.style]?.color||t.muted,padding:"2px 7px",borderRadius:3 }}>{pos.style}</span>}
+                                </div>
+                                <div style={{ fontSize:11,color:t.muted,marginBottom:6 }}>{pos?styleFlag(f,pos.style):f.reason}</div>
+                                {/* Quantified sizing recommendation */}
+                                <div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>
+                                  <span style={{ fontSize:10,background:t.card,color:t.accent,padding:"3px 9px",borderRadius:4,border:`1px solid ${dark?"#7a4f1a":"#fcd34d"}`,fontWeight:500 }}>
+                                    {pos?getSizingRec(f,pos):f.action}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {/* All-timeframe scores */}
+                      <div>
+                        <div style={{ fontSize:10,color:t.muted,letterSpacing:1.5,marginBottom:10 }}>IMPACT SCORES — ALL TIMEFRAMES</div>
+                        {[{label:"HFT",key:"hftImpact",color:"#7c3aed"},{label:"SWING",key:"swingImpact",color:"#0369a1"},{label:"MACRO",key:"macroImpact",color:"#b45309"}].map(({label,key,color})=>(
+                          <div key={key} style={{ marginBottom:10 }}>
+                            <div style={{ fontSize:9,color,letterSpacing:1,marginBottom:5,display:"flex",alignItems:"center",gap:5 }}>
+                              <div style={{ width:3,height:10,background:color,borderRadius:2 }} />{label}
+                            </div>
+                            <div style={{ display:"flex",gap:4,flexWrap:"wrap" }}>
+                              {Object.entries(sel[key]||sel.scores).map(([k,v])=>(
+                                <div key={k} className="score-chip" style={{ background:scoreBg(v,dark),border:`1px solid ${scoreBorder(v,dark)}`,borderRadius:5,padding:"5px 9px",textAlign:"center",minWidth:54 }}>
+                                  <div style={{ fontSize:8,color:t.muted,marginBottom:2 }}>{k}</div>
+                                  <div style={{ fontFamily:"'DM Mono',monospace",fontSize:12,fontWeight:600,color:scoreColor(v,dark) }}>{v>0?"+":""}{v}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ):<div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:200,color:t.muted,fontSize:13 }}>Select an event</div>}
+                </div>
+              </div>
+            )}
+
+            {/* HEATMAP VIEW */}
+            {feedView==="heatmap" && (
+              <div style={{ maxWidth:920 }}>
+                <div style={{ background:t.card,border:`1px solid ${t.border}`,borderRadius:8,padding:"10px 14px",marginBottom:14,fontSize:11,color:t.muted }}>
+                  <span style={{ color:t.text,fontWeight:600 }}>{impactMode}:</span>{" "}
+                  {impactMode==="HFT"?"Spike magnitude — extreme, fades hours. React to volatility.":impactMode==="Swing"?"3–7 day narrative. Second-order effects primary.":"Weeks–months. Single prints noise unless trend-breaking."}
+                  {timeDecay&&" · Exponential decay active."}
+                </div>
+                {/* Net exposure bar */}
+                <div style={{ background:t.card,border:`1px solid ${t.border}`,borderRadius:8,padding:"9px 14px",marginBottom:14,display:"flex",gap:16,flexWrap:"wrap",alignItems:"center" }}>
+                  <span style={{ fontSize:9,color:t.muted,letterSpacing:1.2,flexShrink:0 }}>NET EXPOSURE</span>
+                  {netExposure.bullish.map(([a,s])=><span key={a} style={{ fontSize:10,color:t.green,background:dark?"#0d2b1a":"#ecfdf5",border:`1px solid ${dark?"#2ea043":"#6ee7b7"}`,padding:"2px 8px",borderRadius:4,fontFamily:"monospace" }}>▲ {a} +{s}</span>)}
+                  {netExposure.bearish.map(([a,s])=><span key={a} style={{ fontSize:10,color:t.red,background:dark?"#2d0f0f":"#fef2f2",border:`1px solid ${dark?"#b91c1c":"#fca5a5"}`,padding:"2px 8px",borderRadius:4,fontFamily:"monospace" }}>▼ {a} {s}</span>)}
+                </div>
+                {/* Asset class legend */}
+                <div style={{ display:"flex",gap:14,marginBottom:14,flexWrap:"wrap" }}>
+                  {["Forex","Crypto","Equities","Commodities","Rates"].map(k=>(
+                    <div key={k} style={{ display:"flex",alignItems:"center",gap:5 }}>
+                      <div style={{ width:7,height:7,borderRadius:"50%",background:assetColor[k] }} />
+                      <span style={{ fontSize:10,color:t.muted }}>{k}</span>
+                    </div>
+                  ))}
+                </div>
+                {/* Heatmap grid */}
+                <div style={{ background:t.card,border:`1px solid ${t.border}`,borderRadius:10,padding:"18px",marginBottom:14 }}>
+                  <div style={{ display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:6 }}>
+                    {HMAP.map(({label,cls})=>{
+                      const score=netScores[label]??0;
+                      const hasConflict=conflicts[label];
+                      return (
+                        <div key={label} style={{ background:scoreBg(score,dark),border:`2px solid ${hasConflict?t.accent:scoreBorder(score,dark)}`,borderRadius:7,padding:"11px 6px",textAlign:"center",position:"relative" }}>
+                          {hasConflict&&<div style={{ position:"absolute",top:3,right:3,width:5,height:5,borderRadius:"50%",background:t.accent }} title="Conflict: high-magnitude events disagree on direction" />}
+                          <div style={{ width:5,height:5,borderRadius:"50%",background:assetColor[cls]||t.muted,margin:"0 auto 5px" }} />
+                          <div style={{ fontSize:9,color:t.muted,marginBottom:4 }}>{label}</div>
+                          <div style={{ fontFamily:"'DM Mono',monospace",fontSize:16,fontWeight:600,color:scoreColor(score,dark) }}>{score>0?"+":""}{score}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {Object.keys(conflicts).length>0&&(
+                    <div style={{ marginTop:12,fontSize:10,color:t.accent }}>
+                      ● Amber border = regime conflict — high-magnitude events disagree on direction: {Object.keys(conflicts).join(", ")}
+                    </div>
+                  )}
+                </div>
+                {/* Per-event breakdown */}
+                <div style={{ fontSize:10,color:t.muted,letterSpacing:1.5,marginBottom:9 }}>PER-EVENT BREAKDOWN — {impactMode.toUpperCase()}</div>
+                {[...EVENTS].sort((a,b)=>b.magnitude-a.magnitude).map(e=>{
+                  const key=impactMode==="HFT"?"hftImpact":impactMode==="Macro"?"macroImpact":"swingImpact";
+                  const scores=e[key]||e.scores;
+                  const decay=decayFactorExp(e.ageMinutes,e.decayHours);
+                  const isStale=decay<0.15;
+                  return (
+                    <div key={e.id} style={{ background:t.card,border:`1px solid ${t.border}`,borderRadius:8,padding:"11px 15px",marginBottom:5,opacity:isStale?0.55:1 }}>
+                      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7 }}>
+                        <div style={{ display:"flex",alignItems:"center",gap:7 }}>
+                          <span style={{ fontSize:12,color:isStale?t.muted:t.text }}>{e.headline.slice(0,60)}…</span>
+                          {isStale&&<span style={{ fontSize:8,color:t.muted,background:t.faint,padding:"1px 4px",borderRadius:3 }}>⏳ STALE</span>}
+                        </div>
+                        <div style={{ display:"flex",gap:5,alignItems:"center",flexShrink:0,marginLeft:8 }}>
+                          {timeDecay&&<span style={{ fontSize:9,color:t.muted,background:t.faint,padding:"1px 5px",borderRadius:3 }}>⏱{(decay*100).toFixed(0)}%</span>}
+                          <span style={{ fontFamily:"'DM Mono',monospace",fontSize:11,color:t.accent }}>{(timeDecay?e.magnitude*decay:e.magnitude).toFixed(1)}</span>
+                        </div>
+                      </div>
+                      <div style={{ display:"flex",gap:4,flexWrap:"wrap" }}>
+                        {Object.entries(scores).filter(([,v])=>v!==0).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1])).map(([k,v])=>(
+                          <span key={k} style={{ fontSize:9,background:scoreBg(v,dark),color:scoreColor(v,dark),padding:"2px 7px",borderRadius:3,fontFamily:"monospace",border:`1px solid ${scoreBorder(v,dark)}` }}>{k} {v>0?"+":""}{v}</span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── PORTFOLIO ── */}
+        {tab==="portfolio" && (
+          <div style={{ maxWidth:1100 }}>
+            {/* Risk Budget Bar */}
+            <div style={{ background:t.card,border:`1px solid ${t.border}`,borderRadius:10,padding:"14px 18px",marginBottom:14 }}>
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10 }}>
+                <div>
+                  <div style={{ fontSize:10,color:t.muted,letterSpacing:1.5,marginBottom:2 }}>RISK BUDGET</div>
+                  <div style={{ fontSize:11,color:t.muted }}>Daily VaR: <span style={{ color:t.text,fontFamily:"monospace" }}>${(RISK_PARAMS.dailyVaR/1000).toFixed(0)}K</span> of <span style={{ color:t.text,fontFamily:"monospace" }}>${(RISK_PARAMS.dailyVaRLimit/1000).toFixed(0)}K</span> limit · Max drawdown: <span style={{ color:t.text,fontFamily:"monospace" }}>{(RISK_PARAMS.maxDrawdownPct*100).toFixed(0)}%</span> stop</div>
+                </div>
+                <div style={{ textAlign:"right" }}>
+                  <div style={{ fontSize:10,color:t.muted,marginBottom:2 }}>BUDGET USED</div>
+                  <div style={{ fontFamily:"monospace",fontSize:20,fontWeight:700,color:RISK_PARAMS.riskBudgetUsed>0.8?t.red:RISK_PARAMS.riskBudgetUsed>0.6?dark?"#fb923c":"#ea580c":t.green }}>{(RISK_PARAMS.riskBudgetUsed*100).toFixed(0)}%</div>
+                </div>
+              </div>
+              <div style={{ height:6,background:t.faint,borderRadius:3,overflow:"hidden" }}>
+                <div style={{ height:6,borderRadius:3,width:`${RISK_PARAMS.riskBudgetUsed*100}%`,background:`linear-gradient(90deg,${t.green},${RISK_PARAMS.riskBudgetUsed>0.8?t.red:RISK_PARAMS.riskBudgetUsed>0.6?dark?"#fb923c":"#ea580c":t.green})`,transition:"width 0.3s" }} />
+              </div>
+              <div style={{ display:"flex",gap:4,marginTop:6 }}>
+                {[25,50,75,90].map(pctMark=>(
+                  <div key={pctMark} style={{ fontSize:9,color:RISK_PARAMS.riskBudgetUsed*100>=pctMark?t.text:t.muted,marginLeft:`${pctMark-2}%` }}>{pctMark}%</div>
+                ))}
+              </div>
+            </div>
+
+            {/* Summary stats + P&L period toggle */}
+            <div style={{ display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:9,marginBottom:14 }}>
+              {[
+                { label:"Total Notional",  value:fmt(totalSize),    color:t.text },
+                { label:pnlPeriod==="pnl"?"P&L Since Open":pnlPeriod==="pnlToday"?"P&L Today":"P&L This Week", value:pnlf(totalPnl), color:totalPnl>=0?t.green:t.red },
+                { label:"Positions",       value:positions.length,  color:t.blue },
+                { label:"Flagged",         value:`${flaggedCount} / ${positions.length}`, color:flaggedCount>3?t.red:t.muted },
+              ].map(s=>(
+                <div key={s.label} style={{ background:t.card,border:`1px solid ${t.border}`,borderRadius:9,padding:"13px 15px" }}>
+                  <div style={{ fontSize:9,color:t.muted,letterSpacing:1.2,marginBottom:4 }}>{s.label.toUpperCase()}</div>
+                  <div style={{ fontFamily:"'DM Mono',monospace",fontSize:17,fontWeight:500,color:s.color }}>{s.value}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Controls row */}
+            <div style={{ display:"flex",gap:10,marginBottom:12,flexWrap:"wrap",alignItems:"center" }}>
+              {/* Style filter */}
+              <div style={{ display:"flex",background:t.surface,border:`1px solid ${t.border}`,borderRadius:7,overflow:"hidden" }}>
+                {["All","HFT","Swing","Macro"].map(s=>(
+                  <button key={s} onClick={()=>setStyleFilter(s)} style={{ padding:"5px 13px",border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:11,fontWeight:500,background:styleFilter===s?t.accent:(dark?"#1c2128":"#f8fafc"),color:styleFilter===s?(dark?"#0a0c0f":"white"):t.muted,transition:"0.15s" }}>{s}</button>
+                ))}
+              </div>
+              {/* P&L period */}
+              <div style={{ display:"flex",background:t.surface,border:`1px solid ${t.border}`,borderRadius:7,overflow:"hidden" }}>
+                {[{id:"pnlToday",l:"Today"},{id:"pnlWeek",l:"Week"},{id:"pnl",l:"Since Open"}].map(p=>(
+                  <button key={p.id} onClick={()=>setPnlPeriod(p.id)} style={{ padding:"5px 12px",border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:10,background:pnlPeriod===p.id?t.accent2:(dark?"#1c2128":"#f8fafc"),color:pnlPeriod===p.id?(dark?"#0a0c0f":"white"):t.muted,transition:"0.15s" }}>{p.l}</button>
+                ))}
+              </div>
+              {/* Sort */}
+              <select value={portSort} onChange={e=>setPortSort(e.target.value)} style={{ padding:"5px 10px",borderRadius:7,border:`1px solid ${t.border}`,background:t.card,color:t.muted,fontSize:11,fontFamily:"inherit",outline:"none" }}>
+                <option value="default">Sort: Default</option>
+                <option value="pnl">Sort: P&L ↓</option>
+                <option value="size">Sort: Size ↓</option>
+                <option value="risk">Sort: Risk first</option>
+              </select>
+            </div>
+
+            {/* Book factor risk */}
+            <BookRiskCard dark={dark} positions={positions} />
+
+            <div style={{ marginTop:14 }} />
+
+            {/* Positions table */}
+            <div style={{ background:t.card,border:`1px solid ${t.border}`,borderRadius:10,overflow:"hidden" }}>
+              <div style={{ display:"grid",gridTemplateColumns:"1.4fr 75px 55px 85px 90px 95px 80px 80px 120px",padding:"9px 16px",borderBottom:`1px solid ${t.border}`,background:dark?"#1c2128":"#fafafa" }}>
+                {["Instrument","Class","Dir","Size","P&L","Style","Alloc/Risk","Status","Action"].map(h=>(
+                  <div key={h} style={{ fontSize:9,color:t.muted,letterSpacing:1 }}>{h.toUpperCase()}</div>
+                ))}
+              </div>
+              {filteredPositions.map((p,idx)=>{
+                const f=flagMap[p.name];
+                const riskDollar=riskPerTrade(p.size,p.stopPct);
+                const sizeStatus=volAdjustedSize(p.size,p.stopPct);
+                const pnlVal=p[pnlPeriod]||0;
+                return (
+                  <div key={p.id} className="pos-row" style={{ display:"grid",gridTemplateColumns:"1.4fr 75px 55px 85px 90px 95px 80px 80px 120px",padding:"11px 16px",background:f?riskBg[f.level]:t.card,borderBottom:idx<filteredPositions.length-1?`1px solid ${t.faint}`:"none",borderLeft:f?`3px solid ${riskColor[f.level]}`:"3px solid transparent",alignItems:"center" }}>
+                    <div style={{ display:"flex",alignItems:"center",gap:5 }}>
+                      <span style={{ fontSize:12,color:t.text,fontWeight:500 }}>{p.name}</span>
+                      {p.liquidity!=="high"&&<span style={{ fontSize:8,color:p.liquidity==="low"?t.red:dark?"#fb923c":"#ea580c",border:`1px solid ${p.liquidity==="low"?riskBr.medium:t.border}`,padding:"1px 4px",borderRadius:2 }} title={`Liquidity: ${p.liquidity}`}>{p.liquidity==="low"?"LOW LIQ":"MED LIQ"}</span>}
+                    </div>
+                    <div style={{ fontSize:10,color:assetColor[p.class]||t.muted }}>{p.class}</div>
+                    <div style={{ fontSize:11,fontWeight:600,color:p.dir==="Long"?t.green:t.red }}>{p.dir.toUpperCase()}</div>
+                    <div style={{ fontFamily:"'DM Mono',monospace",fontSize:11,color:t.muted }}>{fmt(p.size)}</div>
+                    <div style={{ fontFamily:"'DM Mono',monospace",fontSize:11,fontWeight:500,color:pnlVal>=0?t.green:t.red }}>{pnlf(pnlVal)}</div>
+                    <div style={{ display:"flex",alignItems:"center",gap:3 }}>
+                      <select className="style-select" value={p.style} onChange={e=>setStyle(p.id,e.target.value)} style={{ background:STYLE_CONTEXT[p.style]?.[dark?"bg_d":"bg_l"]||t.faint,color:STYLE_CONTEXT[p.style]?.color||t.muted,border:`1px solid ${p.styleSet?t.border:"#fbbf24"}` }}>
+                        <option value="HFT">HFT</option><option value="Swing">Swing</option><option value="Macro">Macro</option>
+                      </select>
+                      {!p.styleSet&&<span style={{ fontSize:8,color:t.accent }} title="Auto-inferred">~</span>}
+                    </div>
+                    <div>
+                      <div style={{ fontFamily:"monospace",fontSize:10,color:t.muted }}>{p.allocation.toFixed(1)}%</div>
+                      <div style={{ fontSize:9,color:sizeStatus==="REDUCE"?t.red:sizeStatus==="CAN SCALE"?t.green:t.muted,fontWeight:500 }}>{sizeStatus}</div>
+                    </div>
+                    <div>
+                      {f?<span style={{ fontSize:10,color:riskColor[f.level],background:t.card,padding:"2px 6px",borderRadius:4,border:`1px solid ${riskBr[f.level]}` }}>{f.level.charAt(0).toUpperCase()+f.level.slice(1)}</span>:<span style={{ fontSize:10,color:t.muted }}>Clear</span>}
+                    </div>
+                    <div>
+                      <span style={{ fontSize:10,background:f?(dark?"#2d220f":"#fffbeb"):t.faint,color:f?t.accent:t.muted,padding:"3px 8px",borderRadius:4,border:`1px solid ${f?(dark?"#7a4f1a":"#fcd34d"):t.border}`,fontWeight:f?500:400,display:"block",lineHeight:1.4 }}>
+                        {f&&positions.find(p2=>p2.name===f.pos)?getSizingRec(f,p):(f?.action||"Hold")}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+              {filteredPositions.length===0&&(
+                <div style={{ padding:"24px",textAlign:"center",color:t.muted,fontSize:12 }}>No {styleFilter} positions in book</div>
+              )}
+            </div>
+
+            {/* Active flags */}
+            {Object.values(flagMap).length>0&&(
+              <div style={{ marginTop:14 }}>
+                <div style={{ fontSize:10,color:t.muted,letterSpacing:1.5,marginBottom:9 }}>ACTIVE RISK FLAGS</div>
+                <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:7 }}>
+                  {Object.values(flagMap).sort((a,b)=>["critical","high","medium","low"].indexOf(a.level)-["critical","high","medium","low"].indexOf(b.level)).map((f,i)=>{
+                    const pos=positions.find(p=>p.name===f.pos);
+                    return (
+                      <div key={i} style={{ background:riskBg[f.level],border:`1px solid ${riskBr[f.level]}`,borderRadius:8,padding:"11px 13px" }}>
+                        <div style={{ display:"flex",justifyContent:"space-between",marginBottom:4,alignItems:"center" }}>
+                          <div style={{ display:"flex",gap:6,alignItems:"center" }}>
+                            <span style={{ fontSize:12,color:t.text,fontWeight:500 }}>{f.pos}</span>
+                            {pos&&<span style={{ fontSize:9,background:STYLE_CONTEXT[pos.style]?.[dark?"bg_d":"bg_l"],color:STYLE_CONTEXT[pos.style]?.color,padding:"1px 6px",borderRadius:3 }}>{pos.style}</span>}
+                          </div>
+                          <span style={{ fontSize:9,color:riskColor[f.level],background:t.card,padding:"2px 7px",borderRadius:3,border:`1px solid ${riskBr[f.level]}` }}>{f.level.toUpperCase()}</span>
+                        </div>
+                        <div style={{ fontSize:11,color:t.muted,marginBottom:6,lineHeight:1.5 }}>{pos?styleFlag(f,pos.style):f.reason}</div>
+                        <span style={{ fontSize:10,background:t.card,color:t.accent,padding:"3px 9px",borderRadius:4,border:`1px solid ${dark?"#7a4f1a":"#fcd34d"}`,fontWeight:500 }}>
+                          {pos?getSizingRec(f,pos):f.action}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── ANALYSIS ── */}
+        {tab==="analysis" && (
+          <div style={{ maxWidth:1100,display:"flex",flexDirection:"column",gap:20 }}>
+            <div style={{ background:t.card,border:`1px solid ${t.border}`,borderRadius:12,padding:"20px 22px" }}>
+              <CorrelationEngine dark={dark} />
+            </div>
+            <div style={{ background:t.card,border:`1px solid ${t.border}`,borderRadius:12,padding:"20px 22px" }}>
+              <ScenarioSimulator positions={positions} dark={dark} />
+            </div>
+          </div>
+        )}
+
+        {/* ── JOURNAL ── */}
+        {tab==="journal" && (
+          <div style={{ maxWidth:900 }}>
+            {/* Sample size warning */}
+            <div style={{ background:dark?"#2d1b0f":"#fff7ed",border:`1px solid ${dark?"#9a3412":"#fdba74"}`,borderRadius:10,padding:"13px 18px",marginBottom:14 }}>
+              <div style={{ fontSize:10,color:dark?"#fb923c":"#ea580c",letterSpacing:1.5,marginBottom:5 }}>STATISTICAL WARNING — INSUFFICIENT SAMPLE</div>
+              <div style={{ fontSize:12,color:t.muted,lineHeight:1.7 }}>
+                Current sample: <strong style={{ color:t.text }}>n={pnlLog.length} trades</strong>. Win rate requires minimum 30 trades for statistical significance (p &lt; 0.05). Current figures are directional only and should not be used to draw edge conclusions. Track at least 30 trades before evaluating pattern reliability.
+              </div>
+            </div>
+
+            <div style={{ background:t.card,border:`1px solid ${t.border}`,borderRadius:12,padding:"20px 22px" }}>
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14 }}>
+                <div>
+                  <div style={{ fontSize:10,color:t.muted,letterSpacing:1.5,marginBottom:4 }}>PNL FEEDBACK ENGINE — EVENT → ACTION → OUTCOME</div>
+                  <div style={{ fontSize:12,color:t.muted }}>Build edge by tracking which event types and assets produce the most reliable signals.</div>
+                </div>
+                <div style={{ textAlign:"right" }}>
+                  <div style={{ fontSize:10,color:t.muted,marginBottom:2 }}>WIN RATE <span style={{ color:dark?"#fb923c":"#ea580c" }}>n={pnlLog.length}</span></div>
+                  <div style={{ fontFamily:"monospace",fontSize:20,fontWeight:700,color:winRate>=0.6?t.green:winRate>=0.4?t.accent:t.red }}>{(winRate*100).toFixed(0)}%</div>
+                </div>
+              </div>
+              <div style={{ background:t.surface,border:`1px solid ${t.border}`,borderRadius:8,overflow:"hidden",marginBottom:14 }}>
+                <div style={{ display:"grid",gridTemplateColumns:"1fr 1.4fr 90px 90px 70px",padding:"8px 14px",borderBottom:`1px solid ${t.border}`,background:dark?"#1c2128":"#fafafa" }}>
+                  {["Event / Type","Action Taken","Asset","Outcome","Result"].map(h=>(
+                    <div key={h} style={{ fontSize:9,color:t.muted,letterSpacing:1 }}>{h.toUpperCase()}</div>
+                  ))}
+                </div>
+                {pnlLog.map((l,i)=>(
+                  <div key={i} style={{ display:"grid",gridTemplateColumns:"1fr 1.4fr 90px 90px 70px",padding:"11px 14px",borderBottom:i<pnlLog.length-1?`1px solid ${t.faint}`:"none",alignItems:"center" }}>
+                    <div>
+                      <div style={{ fontSize:12,color:t.muted }}>{l.event}</div>
+                      <div style={{ fontSize:9,color:t.muted,marginTop:2,opacity:0.7 }}>{l.type}</div>
+                    </div>
+                    <div style={{ fontSize:11,color:t.text }}>{l.action}</div>
+                    <div style={{ fontSize:11,color:assetColor[POSITIONS.find(p=>p.name===l.asset)?.class]||t.muted }}>{l.asset}</div>
+                    <div style={{ fontFamily:"monospace",fontSize:12,fontWeight:600,color:l.outcome.startsWith("+")?t.green:t.red }}>{l.outcome}</div>
+                    <div><span style={{ fontSize:10,background:l.worked?(dark?"#0d2b1a":"#dcfce7"):(dark?"#2d0f0f":"#fef2f2"),color:l.worked?t.green:t.red,padding:"3px 8px",borderRadius:4,fontWeight:500 }}>{l.worked?"✓ WORKED":"✗ MISS"}</span></div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:9 }}>
+                {edgeSummary.map(s=>(
+                  <div key={s.label} style={{ background:dark?"#1c2128":"#f8fafc",border:`1px solid ${t.border}`,borderRadius:8,padding:"12px 14px" }}>
+                    <div style={{ fontSize:9,color:t.muted,letterSpacing:1,marginBottom:4 }}>{s.label.toUpperCase()}</div>
+                    <div style={{ fontSize:13,color:t.text,fontWeight:600,marginBottom:3 }}>{s.value}</div>
+                    <div style={{ fontSize:11,color:t.muted }}>{s.sub}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+      </div>
+
+      {/* ── FLOATING AI BUTTON + PANEL ── */}
+      <AIPanel dark={dark} open={aiOpen} onClose={()=>setAiOpen(false)} />
+      <button onClick={()=>setAiOpen(o=>!o)} style={{
+        position:"fixed",bottom:20,right:24,zIndex:999,
+        background:aiOpen?t.accent2:t.card,border:`1px solid ${aiOpen?t.accent2:t.border}`,
+        borderRadius:50,padding:"9px 16px",cursor:"pointer",fontFamily:"inherit",
+        display:"flex",alignItems:"center",gap:7,
+        boxShadow:`0 4px 20px rgba(0,0,0,${dark?0.5:0.12})`,
+        color:aiOpen?"white":t.text,fontSize:12,fontWeight:500,
+        transition:"all 0.2s",
+      }}>
+        <span style={{ fontSize:14 }}>⚡</span>
+        {aiOpen?"Close":"AI Analyst"}
+      </button>
+    </div>
+  );
+}
